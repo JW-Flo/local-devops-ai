@@ -28,6 +28,7 @@ import {
 import {
   dispatchTasks, getDispatchConfig, updateDispatchConfig, getLastDispatch, isDispatching,
 } from "./task-dispatcher.js";
+import { updateRoadmaps } from "./roadmap-updater.js";
 import {
   loadSources, saveSources, fetchAllSources, type KnowledgeSource,
 } from "./knowledge/fetcher.js";
@@ -315,6 +316,15 @@ app.post("/agent/dispatch", async (req, res) => {
 
 app.put("/agent/dispatch/config", (req, res) => {
   res.json({ status: "success", data: updateDispatchConfig(req.body) });
+});
+
+app.post("/agent/roadmap-update", async (_req, res) => {
+  try {
+    const results = await updateRoadmaps();
+    res.json({ status: "success", data: results });
+  } catch (err) {
+    res.status(500).json({ status: "error", message: (err as Error).message });
+  }
 });
 
 // ── Memory Search ──

@@ -1,0 +1,58 @@
+# Local DevOps AI — Roadmap
+
+> This roadmap is automatically updated by the agent loop after each dispatch cycle.
+> Items marked [x] were completed by the autonomous agent.
+
+## Phase 1: Core Platform (Complete)
+
+- [x] Multi-provider LLM gateway (OpenRouter → Bedrock → Ollama)
+- [x] Smart rate-limit intelligence with proactive pacing
+- [x] Knowledge pipeline (Qdrant vector store + Ollama embeddings)
+- [x] Agent orchestrator (roadmap parsing → task generation)
+- [x] Coding agent (LLM code generation → GitHub PRs)
+- [x] Self-healing runtime (port conflicts, circuit breakers, watchdog)
+- [x] Task dispatcher (connect planning to execution)
+- [x] Gradual circuit breaker recovery (25% → 100% ramp-up)
+- [x] Vector-backed memory store (SQLite + Qdrant dual-backend)
+- [x] Knowledge fetch timer (periodic external doc ingestion)
+- [x] Roadmap auto-updater (closes the recursive loop)
+
+## Phase 2: Reliability & Observability — HIGH
+
+- [ ] Add process manager (pm2 or Windows service) for crash recovery and auto-restart
+- [ ] Add structured logging with log levels and rotation
+- [ ] Build health dashboard endpoint aggregating all subsystem status
+- [ ] Add retry budget tracking — cap total retries per window across all providers
+- [ ] Implement request tracing with correlation IDs across LLM calls
+- [ ] Add Prometheus metrics exporter for Grafana integration
+
+## Phase 3: Agent Intelligence — HIGH
+
+- [ ] Implement multi-turn agent planning with context carry-over between cycles
+- [ ] Add task result validation — verify generated code compiles before PR
+- [ ] Build feedback loop from PR review comments back to task generation
+- [ ] Implement semantic deduplication of tasks across cycles
+- [ ] Add cost-aware task prioritization (cheap tasks first when budget is low)
+- [ ] Build agent memory consolidation — summarize old memories to save context window
+
+## Phase 4: Security Hardening — MEDIUM
+
+- [ ] Add API authentication to gateway endpoints (bearer token)
+- [ ] Implement audit log for all state-changing operations
+- [ ] Add rate limiting on gateway API endpoints (not just LLM)
+- [ ] Implement secrets scanning before any code commit
+- [ ] Add RBAC for approval workflows (task execution permissions)
+
+## Phase 5: Multi-Repo Intelligence — MEDIUM
+
+- [ ] Build cross-repo dependency graph from task analysis
+- [ ] Implement shared knowledge context across repos
+- [ ] Add PR impact analysis — predict which repos are affected by a change
+- [ ] Build automated changelog generation from merged PRs
+
+## Phase 6: Self-Improvement — LOW
+
+- [ ] Agent should identify its own bugs from error logs and generate fixes
+- [ ] Build performance benchmarking — track task success rate over time
+- [ ] Implement A/B testing for LLM prompts (measure task completion quality)
+- [ ] Add capability to install new tools/models based on task requirements

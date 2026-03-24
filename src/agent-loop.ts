@@ -1,10 +1,11 @@
 /**
  * Continuous Agent Loop — runs agent cycles on a configurable interval.
  *
- * Three-phase cycle:
+ * Four-phase cycle:
  *   Phase 1: Fetch new knowledge sources (external docs)
  *   Phase 2: Run the agent (roadmap parsing + task generation)
  *   Phase 3: Dispatch executable tasks to the coding agent
+ *   Phase 4: Update roadmaps with dispatch results (closes the loop)
  *
  * Rate limiting is now handled centrally by rate-limiter.ts.
  * The loop respects provider pacing and cost budgets automatically.
@@ -17,6 +18,7 @@ import { runAgent, getAgentState } from "./agent.js";
 import { fetchAllSources } from "./knowledge/fetcher.js";
 import { KnowledgeIngester } from "./knowledge/ingester.js";
 import { dispatchTasks, type DispatchResult } from "./task-dispatcher.js";
+import { updateRoadmaps, type RoadmapUpdate } from "./roadmap-updater.js";
 import { broadcast } from "./events.js";
 import { config } from "./config.js";
 
@@ -80,6 +82,21 @@ async function runCycle(): Promise<void> {
       console.log("[agent-loop] phase 3: task dispatch disabled (set TASK_DISPATCH_IN_LOOP=1)");
     } else {
       console.log("[agent-loop] phase 3: no tasks to dispatch");
+    }
+
+    // Phase 4: Update roadmaps with dispatch results (closes the recursion loop)
+    let roadmapUpdates: RoadmapUpdate[] = [];
+    if (dispatchResult && dispatchResult.dispatched > 0) {
+      console.log("[agent-loop] phase 4: updating roadmaps...");
+      try {
+        roadmapUpdates = await updateRoadmaps();
+        const updatedCount = roadmapUpdates.filter((r) => r.updated).length;
+        console.log(`[agent-loop] phase 4: ${updatedCount}/${roadmapUpdates.length} roadmaps updated`);
+      } catch (err) {
+        console.warn(`[agent-loop] phase 4 failed: ${(err as Error).message}`);
+      }
+    } else {
+      console.log("[agent-loop] phase 4: no dispatch results, skipping roadmap update");
     }
 
     const elapsed = Date.now() - start;
