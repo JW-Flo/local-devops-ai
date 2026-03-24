@@ -161,30 +161,61 @@ async function restartService(svc: ServiceState): Promise<boolean> {
     }
 
     if (svc.name === "qdrant") {
-      try {
-        execSync("docker info", { timeout: 10000, stdio: "pipe" });
-        const containers = execSync('docker ps -a --filter name=qdrant --format "{{.Names}}:{{.Status}}"', {
-          encoding: "utf8", timeout: 5000,
-        }).trim();
-        if (containers.includes("qdrant")) {
-          execSync("docker start qdrant", { timeout: 15000 });
-        } else {
-          execSync(
-            "docker run -d --name qdrant -p 6333:6333 -p 6334:6334 -v qdrant_storage:/qdrant/storage qdrant/qdrant",
-            { timeout: 60000 },
-          );
+      // Try native binary first (preferred), then Docker fallback
+      const qdrantPaths = isWindows
+        ? [
+            `${process.env.USERPROFILE || "C:\\Users\\joewh"}\\ai-cache\\qdrant-bin\\qdrant.exe`,
+            "qdrant",
+          ]
+        : ["qdrant"];
+      const configPath = isWindows
+        ? `${process.env.USERPROFILE || "C:\\Users\\joewh"}\\ai-cache\\qdrant-bin\\config.yaml`
+        : "";
+      let nativeStarted = false;
+      for (const qdrantPath of qdrantPaths) {
+        try {
+          const args = configPath ? ["--config-path", configPath] : [];
+          const child = spawn(qdrantPath, args, { detached: true, stdio: "ignore", shell: true });
+          child.unref();
+          await new Promise((r) => setTimeout(r, 8000));
+          if (await pingService(svc)) {
+            await logIssue("qdrant-error", "info",
+              `Qdrant auto-restarted via native binary (attempt ${svc.restartAttempts})`,
+              `Service restored at ${svc.url}`, { path: qdrantPath, attempt: svc.restartAttempts }, true);
+            svc.consecutiveDownChecks = 0;
+            svc.lastUp = Date.now();
+            nativeStarted = true;
+            return true;
+          }
+        } catch { /* try next path */ }
+      }
+      // Docker fallback if native binary not found
+      if (!nativeStarted) {
+        try {
+          execSync("docker info", { timeout: 10000, stdio: "pipe" });
+          const containers = execSync('docker ps -a --filter name=qdrant --format "{{.Names}}:{{.Status}}"', {
+            encoding: "utf8", timeout: 5000,
+          }).trim();
+          if (containers.includes("qdrant")) {
+            execSync("docker start qdrant", { timeout: 15000 });
+          } else {
+            execSync(
+              "docker run -d --name qdrant -p 6333:6333 -p 6334:6334 -v qdrant_storage:/qdrant/storage qdrant/qdrant",
+              { timeout: 60000 },
+            );
+          }
+          await new Promise((r) => setTimeout(r, 8000));
+          if (await pingService(svc)) {
+            await logIssue("qdrant-error", "info",
+              `Qdrant auto-restarted via Docker`, `Service restored at ${svc.url}`,
+              { method: containers.includes("qdrant") ? "docker start" : "docker run" }, true);
+            svc.consecutiveDownChecks = 0;
+            svc.lastUp = Date.now();
+            return true;
+          }
+        } catch (dockerErr) {
+          console.log(`[self-healer] Docker fallback also failed for Qdrant: ${(dockerErr as Error).message?.slice(0, 80)}`);
         }
-        await new Promise((r) => setTimeout(r, 8000));
-        if (await pingService(svc)) {
-          await logIssue("qdrant-error", "info",
-            `Qdrant auto-restarted via Docker`, `Service restored at ${svc.url}`,
-            { method: containers.includes("qdrant") ? "docker start" : "docker run" }, true);
-          svc.consecutiveDownChecks = 0;
-          svc.lastUp = Date.now();
-          return true;
-        }
-      } catch (dockerErr) {
-        console.log(`[self-healer] Docker not available for Qdrant restart: ${(dockerErr as Error).message?.slice(0, 80)}`);
       }
     }
 
