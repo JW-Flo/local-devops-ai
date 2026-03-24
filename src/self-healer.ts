@@ -189,34 +189,7 @@ async function restartService(svc: ServiceState): Promise<boolean> {
           }
         } catch { /* try next path */ }
       }
-      // Docker fallback if native binary not found
-      if (!nativeStarted) {
-        try {
-          execSync("docker info", { timeout: 10000, stdio: "pipe" });
-          const containers = execSync('docker ps -a --filter name=qdrant --format "{{.Names}}:{{.Status}}"', {
-            encoding: "utf8", timeout: 5000,
-          }).trim();
-          if (containers.includes("qdrant")) {
-            execSync("docker start qdrant", { timeout: 15000 });
-          } else {
-            execSync(
-              "docker run -d --name qdrant -p 6333:6333 -p 6334:6334 -v qdrant_storage:/qdrant/storage qdrant/qdrant",
-              { timeout: 60000 },
-            );
-          }
-          await new Promise((r) => setTimeout(r, 8000));
-          if (await pingService(svc)) {
-            await logIssue("qdrant-error", "info",
-              `Qdrant auto-restarted via Docker`, `Service restored at ${svc.url}`,
-              { method: containers.includes("qdrant") ? "docker start" : "docker run" }, true);
-            svc.consecutiveDownChecks = 0;
-            svc.lastUp = Date.now();
-            return true;
-          }
-        } catch (dockerErr) {
-          console.log(`[self-healer] Docker fallback also failed for Qdrant: ${(dockerErr as Error).message?.slice(0, 80)}`);
-        }
-      }
+      // No Docker on this machine — native binary is the only restart path
     }
 
     await logIssue(
