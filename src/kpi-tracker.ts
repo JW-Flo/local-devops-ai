@@ -13,7 +13,7 @@
  *   5. Velocity     — roadmap items completed, trend direction
  */
 
-import { getDb } from "./storage/sqlite.js";
+import { withDb } from "./storage/sqlite.js";
 import { broadcast } from "./events.js";
 import type { DispatchResult } from "./task-dispatcher.js";
 import type { RemediationStats } from "./task-remediator.js";
@@ -106,150 +106,165 @@ let cyclesSinceViolation = 0;
 
 // ── SQLite Persistence ──
 
-function ensureTable(): void {
+async function ensureTable(): Promise<void> {
   try {
-    const db = getDb();
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS kpi_cycles (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cycle_number INTEGER NOT NULL,
-        timestamp TEXT NOT NULL,
-        duration_ms INTEGER NOT NULL,
-        items_parsed INTEGER DEFAULT 0,
-        tasks_generated INTEGER DEFAULT 0,
-        tasks_dispatched INTEGER DEFAULT 0,
-        tasks_succeeded INTEGER DEFAULT 0,
-        tasks_failed INTEGER DEFAULT 0,
-        tasks_remediated INTEGER DEFAULT 0,
-        tasks_skipped INTEGER DEFAULT 0,
-        success_rate REAL DEFAULT 0,
-        remediation_rate REAL DEFAULT 0,
-        total_tokens INTEGER DEFAULT 0,
-        estimated_cost_usd REAL DEFAULT 0,
-        provider_failures INTEGER DEFAULT 0,
-        circuit_breaker_trips INTEGER DEFAULT 0,
-        agent_errors INTEGER DEFAULT 0,
-        items_completed INTEGER DEFAULT 0,
-        repos_updated INTEGER DEFAULT 0
-      )
-    `);
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS kpi_failures (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        reason TEXT NOT NULL,
-        count INTEGER DEFAULT 1,
-        last_seen TEXT NOT NULL
-      )
-    `);
+    await withDb((db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS kpi_cycles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          cycle_number INTEGER NOT NULL,
+          timestamp TEXT NOT NULL,
+          duration_ms INTEGER NOT NULL,
+          items_parsed INTEGER DEFAULT 0,
+          tasks_generated INTEGER DEFAULT 0,
+          tasks_dispatched INTEGER DEFAULT 0,
+          tasks_succeeded INTEGER DEFAULT 0,
+          tasks_failed INTEGER DEFAULT 0,
+          tasks_remediated INTEGER DEFAULT 0,
+          tasks_skipped INTEGER DEFAULT 0,
+          success_rate REAL DEFAULT 0,
+          remediation_rate REAL DEFAULT 0,
+          total_tokens INTEGER DEFAULT 0,
+          estimated_cost_usd REAL DEFAULT 0,
+          provider_failures INTEGER DEFAULT 0,
+          circuit_breaker_trips INTEGER DEFAULT 0,
+          agent_errors INTEGER DEFAULT 0,
+          items_completed INTEGER DEFAULT 0,
+          repos_updated INTEGER DEFAULT 0
+        )
+      `);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS kpi_failures (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          reason TEXT NOT NULL,
+          count INTEGER DEFAULT 1,
+          last_seen TEXT NOT NULL
+        )
+      `);
+    });
   } catch (err) {
     console.warn(`[kpi] table init failed: ${(err as Error).message}`);
   }
 }
 
 
-function persistCycle(snapshot: CycleSnapshot): void {
+async function persistCycle(snapshot: CycleSnapshot): Promise<void> {
   try {
-    const db = getDb();
-    db.prepare(`
-      INSERT INTO kpi_cycles (
-        cycle_number, timestamp, duration_ms, items_parsed,
-        tasks_generated, tasks_dispatched, tasks_succeeded,
-        tasks_failed, tasks_remediated, tasks_skipped,
-        success_rate, remediation_rate, total_tokens,
-        estimated_cost_usd, provider_failures,
-        circuit_breaker_trips, agent_errors,
-        items_completed, repos_updated
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      snapshot.cycleNumber, snapshot.timestamp, snapshot.durationMs,
-      snapshot.roadmapItemsParsed, snapshot.tasksGenerated,
-      snapshot.tasksDispatched, snapshot.tasksSucceeded,
-      snapshot.tasksFailed, snapshot.tasksRemediated,
-      snapshot.tasksSkipped, snapshot.successRate,
-      snapshot.remediationRate, snapshot.totalTokens,
-      snapshot.estimatedCostUsd, snapshot.providerFailures,
-      snapshot.circuitBreakerTrips, snapshot.agentErrors,
-      snapshot.roadmapItemsCompleted, snapshot.reposUpdated,
-    );
+    await withDb((db) => {
+      const stmt = db.prepare(`
+        INSERT INTO kpi_cycles (
+          cycle_number, timestamp, duration_ms, items_parsed,
+          tasks_generated, tasks_dispatched, tasks_succeeded,
+          tasks_failed, tasks_remediated, tasks_skipped,
+          success_rate, remediation_rate, total_tokens,
+          estimated_cost_usd, provider_failures,
+          circuit_breaker_trips, agent_errors,
+          items_completed, repos_updated
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      stmt.run([
+        snapshot.cycleNumber, snapshot.timestamp, snapshot.durationMs,
+        snapshot.roadmapItemsParsed, snapshot.tasksGenerated,
+        snapshot.tasksDispatched, snapshot.tasksSucceeded,
+        snapshot.tasksFailed, snapshot.tasksRemediated,
+        snapshot.tasksSkipped, snapshot.successRate,
+        snapshot.remediationRate, snapshot.totalTokens,
+        snapshot.estimatedCostUsd, snapshot.providerFailures,
+        snapshot.circuitBreakerTrips, snapshot.agentErrors,
+        snapshot.roadmapItemsCompleted, snapshot.reposUpdated,
+      ]);
+      stmt.free();
+    }, { persist: true });
   } catch (err) {
     console.warn(`[kpi] persist failed: ${(err as Error).message}`);
   }
 }
 
-function persistFailure(reason: string): void {
+async function persistFailure(reason: string): Promise<void> {
   try {
-    const db = getDb();
-    const existing = db.prepare(
-      `SELECT id, count FROM kpi_failures WHERE reason = ?`
-    ).get(reason) as any;
-    if (existing) {
-      db.prepare(
-        `UPDATE kpi_failures SET count = count + 1, last_seen = ? WHERE id = ?`
-      ).run(new Date().toISOString(), existing.id);
-    } else {
-      db.prepare(
-        `INSERT INTO kpi_failures (reason, count, last_seen) VALUES (?, 1, ?)`
-      ).run(reason, new Date().toISOString());
-    }
+    await withDb((db) => {
+      const check = db.prepare(`SELECT id, count FROM kpi_failures WHERE reason = ?`);
+      check.bind([reason]);
+      if (check.step()) {
+        const row = check.getAsObject();
+        check.free();
+        const upd = db.prepare(`UPDATE kpi_failures SET count = count + 1, last_seen = ? WHERE id = ?`);
+        upd.run([new Date().toISOString(), row.id]);
+        upd.free();
+      } else {
+        check.free();
+        const ins = db.prepare(`INSERT INTO kpi_failures (reason, count, last_seen) VALUES (?, 1, ?)`);
+        ins.run([reason, new Date().toISOString()]);
+        ins.free();
+      }
+    }, { persist: true });
   } catch (err) {
     console.warn(`[kpi] failure persist failed: ${(err as Error).message}`);
   }
 }
 
-function loadHistory(): void {
+async function loadHistory(): Promise<void> {
   try {
-    const db = getDb();
-    const rows = db.prepare(
-      `SELECT * FROM kpi_cycles ORDER BY id DESC LIMIT ?`
-    ).all(MAX_HISTORY) as any[];
+    await withDb((db) => {
+      // Load cycles
+      const stmt = db.prepare(`SELECT * FROM kpi_cycles ORDER BY id DESC LIMIT ?`);
+      stmt.bind([MAX_HISTORY]);
+      const rows: any[] = [];
+      while (stmt.step()) {
+        rows.push(stmt.getAsObject());
+      }
+      stmt.free();
 
-    for (const row of rows.reverse()) {
-      cycleHistory.push({
-        cycleNumber: row.cycle_number,
-        timestamp: row.timestamp,
-        durationMs: row.duration_ms,
-        roadmapItemsParsed: row.items_parsed,
-        tasksGenerated: row.tasks_generated,
-        tasksDispatched: row.tasks_dispatched,
-        tasksSucceeded: row.tasks_succeeded,
-        tasksFailed: row.tasks_failed,
-        tasksRemediated: row.tasks_remediated,
-        tasksSkipped: row.tasks_skipped,
-        successRate: row.success_rate,
-        remediationRate: row.remediation_rate,
-        totalTokens: row.total_tokens,
-        estimatedCostUsd: row.estimated_cost_usd,
-        tokensPerTask: row.tasks_dispatched > 0 ? row.total_tokens / row.tasks_dispatched : 0,
-        costPerTask: row.tasks_dispatched > 0 ? row.estimated_cost_usd / row.tasks_dispatched : 0,
-        providerFailures: row.provider_failures,
-        circuitBreakerTrips: row.circuit_breaker_trips,
-        agentErrors: row.agent_errors,
-        roadmapItemsCompleted: row.items_completed,
-        reposUpdated: row.repos_updated,
-      });
-    }
+      for (const row of rows.reverse()) {
+        cycleHistory.push({
+          cycleNumber: row.cycle_number as number,
+          timestamp: row.timestamp as string,
+          durationMs: row.duration_ms as number,
+          roadmapItemsParsed: row.items_parsed as number,
+          tasksGenerated: row.tasks_generated as number,
+          tasksDispatched: row.tasks_dispatched as number,
+          tasksSucceeded: row.tasks_succeeded as number,
+          tasksFailed: row.tasks_failed as number,
+          tasksRemediated: row.tasks_remediated as number,
+          tasksSkipped: row.tasks_skipped as number,
+          successRate: row.success_rate as number,
+          remediationRate: row.remediation_rate as number,
+          totalTokens: row.total_tokens as number,
+          estimatedCostUsd: row.estimated_cost_usd as number,
+          tokensPerTask: (row.tasks_dispatched as number) > 0
+            ? (row.total_tokens as number) / (row.tasks_dispatched as number) : 0,
+          costPerTask: (row.tasks_dispatched as number) > 0
+            ? (row.estimated_cost_usd as number) / (row.tasks_dispatched as number) : 0,
+          providerFailures: row.provider_failures as number,
+          circuitBreakerTrips: row.circuit_breaker_trips as number,
+          agentErrors: row.agent_errors as number,
+          roadmapItemsCompleted: row.items_completed as number,
+          reposUpdated: row.repos_updated as number,
+        });
+      }
 
-    totalCycles = cycleHistory.length;
-    for (const c of cycleHistory) {
-      totalDispatched += c.tasksDispatched;
-      totalSucceeded += c.tasksSucceeded;
-      totalFailed += c.tasksFailed;
-      totalRemediated += c.tasksRemediated;
-      totalCostUsd += c.estimatedCostUsd;
-      totalTokens += c.totalTokens;
-    }
+      totalCycles = cycleHistory.length;
+      for (const c of cycleHistory) {
+        totalDispatched += c.tasksDispatched;
+        totalSucceeded += c.tasksSucceeded;
+        totalFailed += c.tasksFailed;
+        totalRemediated += c.tasksRemediated;
+        totalCostUsd += c.estimatedCostUsd;
+        totalTokens += c.totalTokens;
+      }
 
-    // Load failure reasons
-    const failures = db.prepare(
-      `SELECT reason, count FROM kpi_failures ORDER BY count DESC`
-    ).all() as any[];
-    for (const f of failures) {
-      failureReasons.set(f.reason, f.count);
-    }
+      // Load failure reasons
+      const fStmt = db.prepare(`SELECT reason, count FROM kpi_failures ORDER BY count DESC`);
+      while (fStmt.step()) {
+        const f = fStmt.getAsObject();
+        failureReasons.set(f.reason as string, f.count as number);
+      }
+      fStmt.free();
 
-    if (totalCycles > 0) {
-      console.log(`[kpi] loaded ${totalCycles} historical cycles`);
-    }
+      if (totalCycles > 0) {
+        console.log(`[kpi] loaded ${totalCycles} historical cycles`);
+      }
+    });
   } catch {
     // Fresh start — no history yet
   }
@@ -338,15 +353,15 @@ export function recordCycle(data: {
       if (r.status === "failed" && r.reason) {
         const normalized = normalizeFailureReason(r.reason);
         failureReasons.set(normalized, (failureReasons.get(normalized) ?? 0) + 1);
-        persistFailure(normalized);
+        persistFailure(normalized).catch(() => {});
       }
     }
   }
 
-  // Store and persist
+  // Store and persist (fire-and-forget to avoid blocking cycle)
   cycleHistory.push(snapshot);
   if (cycleHistory.length > MAX_HISTORY) cycleHistory.shift();
-  persistCycle(snapshot);
+  persistCycle(snapshot).catch(() => {});
 
   broadcast("kpi:cycle-recorded", {
     cycle: totalCycles,
@@ -453,9 +468,9 @@ function detectTrend(
 
 // ── Initialization ──
 
-export function initKPITracker(): void {
-  ensureTable();
-  loadHistory();
+export async function initKPITracker(): Promise<void> {
+  await ensureTable();
+  await loadHistory();
   console.log("[kpi] tracker initialized");
 }
 
@@ -465,7 +480,7 @@ export function getCycleHistory(limit = 20): CycleSnapshot[] {
   return cycleHistory.slice(-limit);
 }
 
-export function resetKPIs(): void {
+export async function resetKPIs(): Promise<void> {
   cycleHistory.length = 0;
   failureReasons.clear();
   totalCycles = 0;
@@ -477,8 +492,9 @@ export function resetKPIs(): void {
   totalTokens = 0;
   cyclesSinceViolation = 0;
   try {
-    const db = getDb();
-    db.exec(`DELETE FROM kpi_cycles`);
-    db.exec(`DELETE FROM kpi_failures`);
+    await withDb((db) => {
+      db.exec(`DELETE FROM kpi_cycles`);
+      db.exec(`DELETE FROM kpi_failures`);
+    }, { persist: true });
   } catch { /* silent */ }
 }
