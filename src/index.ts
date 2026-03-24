@@ -30,6 +30,9 @@ import {
 } from "./task-dispatcher.js";
 import { updateRoadmaps } from "./roadmap-updater.js";
 import {
+  remediateTask, getRemediationLog, getRemediationStats, clearRemediationLog,
+} from "./task-remediator.js";
+import {
   loadSources, saveSources, fetchAllSources, type KnowledgeSource,
 } from "./knowledge/fetcher.js";
 import {
@@ -325,6 +328,34 @@ app.post("/agent/roadmap-update", async (_req, res) => {
   } catch (err) {
     res.status(500).json({ status: "error", message: (err as Error).message });
   }
+});
+
+// ── Task Remediation ──
+
+app.get("/agent/remediation", (_req, res) => {
+  res.json({
+    status: "success",
+    data: { stats: getRemediationStats(), log: getRemediationLog() },
+  });
+});
+
+app.post("/agent/remediation", async (req, res) => {
+  const { taskId, owner, repo, dryRun } = req.body;
+  const agentState = getAgentState();
+  const task = agentState.generatedTasks.find((t) => t.id === taskId);
+  if (!task) return res.status(404).json({ status: "error", message: `Task ${taskId} not found` });
+  if (!owner || !repo) return res.status(400).json({ status: "error", message: "owner and repo required" });
+  try {
+    const record = await remediateTask(task, owner, repo, "Manual remediation trigger", { dryRun: dryRun ?? true });
+    res.json({ status: "success", data: record });
+  } catch (err) {
+    res.status(500).json({ status: "error", message: (err as Error).message });
+  }
+});
+
+app.delete("/agent/remediation", (_req, res) => {
+  clearRemediationLog();
+  res.json({ status: "success", data: { cleared: true } });
 });
 
 // ── Memory Search ──
