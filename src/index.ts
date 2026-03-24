@@ -26,6 +26,9 @@ import {
   startAgentLoop, stopAgentLoop, getAgentLoopState, updateLoopConfig,
 } from "./agent-loop.js";
 import {
+  dispatchTasks, getDispatchConfig, updateDispatchConfig, getLastDispatch, isDispatching,
+} from "./task-dispatcher.js";
+import {
   loadSources, saveSources, fetchAllSources, type KnowledgeSource,
 } from "./knowledge/fetcher.js";
 import {
@@ -250,8 +253,8 @@ app.post("/agent/loop/stop", (_req, res) => {
 });
 
 app.put("/agent/loop/config", (req, res) => {
-  const { intervalMs, maxApiCallsPerWindow } = req.body;
-  res.json({ status: "success", data: updateLoopConfig({ intervalMs, maxApiCallsPerWindow }) });
+  const { intervalMs, dispatchEnabled } = req.body;
+  res.json({ status: "success", data: updateLoopConfig({ intervalMs, dispatchEnabled }) });
 });
 
 // ── Coding Agent ──
@@ -284,6 +287,36 @@ app.post("/agent/code-all", async (req, res) => {
   res.json({ status: "success", data: { total: results.length, succeeded: results.filter((r) => r.success).length, results } });
 });
 
+// ── Task Dispatcher ──
+
+app.get("/agent/dispatch", (_req, res) => {
+  res.json({
+    status: "success",
+    data: {
+      config: getDispatchConfig(),
+      lastDispatch: getLastDispatch(),
+      dispatching: isDispatching(),
+    },
+  });
+});
+
+app.post("/agent/dispatch", async (req, res) => {
+  if (isDispatching()) {
+    return res.status(409).json({ status: "error", message: "Dispatch already in progress" });
+  }
+  const opts = req.body ?? {};
+  try {
+    const result = await dispatchTasks(opts);
+    res.json({ status: "success", data: result });
+  } catch (err) {
+    res.status(500).json({ status: "error", message: (err as Error).message });
+  }
+});
+
+app.put("/agent/dispatch/config", (req, res) => {
+  res.json({ status: "success", data: updateDispatchConfig(req.body) });
+});
+
 // ── Memory Search ──
 
 app.get("/memories/search", async (req, res) => {
@@ -294,6 +327,29 @@ app.get("/memories/search", async (req, res) => {
   try {
     const results = await memoryStore.search(q, { tags, source, limit });
     res.json({ status: "success", data: results });
+  } catch (err) {
+    res.status(500).json({ status: "error", message: (err as Error).message });
+  }
+});
+
+app.get("/memories/semantic", async (req, res) => {
+  const q = String(req.query.q ?? "");
+  if (!q) return res.status(400).json({ status: "error", message: "q parameter required" });
+  const source = req.query.source ? String(req.query.source) : undefined;
+  const limit = Number(req.query.limit ?? 10);
+  try {
+    const results = await memoryStore.semanticSearch(q, { source, limit });
+    res.json({ status: "success", data: results });
+  } catch (err) {
+    res.status(500).json({ status: "error", message: (err as Error).message });
+  }
+});
+
+app.get("/memories/stats", async (_req, res) => {
+  try {
+    const stats = await memoryStore.vectorStats();
+    const sqliteCount = (await memoryStore.list(1)).length > 0 ? "has entries" : "empty";
+    res.json({ status: "success", data: { ...stats, sqlite: sqliteCount } });
   } catch (err) {
     res.status(500).json({ status: "error", message: (err as Error).message });
   }
@@ -460,6 +516,24 @@ app.get("/healer/providers", (_req, res) => {
 await runStartupChecks(config.port);
 
 startKnowledgeWatcher();
+
+// Auto-start knowledge fetch timer
+if (config.knowledgeFetchEnabled) {
+  const fetchIntervalMs = config.knowledgeFetchIntervalMs;
+  console.log(`[startup] knowledge fetch timer: ${fetchIntervalMs / 60000}min interval`);
+  setInterval(async () => {
+    try {
+      console.log("[knowledge-fetch-timer] fetching sources...");
+      const result = await fetchAllSources();
+      if (result.fetched > 0) {
+        console.log(`[knowledge-fetch-timer] ${result.fetched} files fetched, re-ingesting...`);
+        await knowledgeIngester.ingest();
+      }
+    } catch (err) {
+      console.warn(`[knowledge-fetch-timer] failed: ${(err as Error).message}`);
+    }
+  }, fetchIntervalMs);
+}
 
 // Auto-start agent loop if configured
 if (config.agentLoopEnabled) {

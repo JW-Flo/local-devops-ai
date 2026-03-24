@@ -1,13 +1,14 @@
 /**
- * Continuous Agent Loop — runs agent cycles on a configurable interval
- * with rate limiting to avoid abusing API limitations.
- * 
- * Rate-limit strategy:
- *   - Configurable interval (default: 30 min)
- *   - Tracks API calls per window
- *   - Backs off if approaching rate limits
- *   - Skips cycle if previous run is still in progress
- * 
+ * Continuous Agent Loop — runs agent cycles on a configurable interval.
+ *
+ * Three-phase cycle:
+ *   Phase 1: Fetch new knowledge sources (external docs)
+ *   Phase 2: Run the agent (roadmap parsing + task generation)
+ *   Phase 3: Dispatch executable tasks to the coding agent
+ *
+ * Rate limiting is now handled centrally by rate-limiter.ts.
+ * The loop respects provider pacing and cost budgets automatically.
+ *
  * The loop is opt-in: starts only when AGENT_LOOP_ENABLED=1 in .env
  * or triggered via the /agent/loop/start API endpoint.
  */
@@ -15,6 +16,7 @@
 import { runAgent, getAgentState } from "./agent.js";
 import { fetchAllSources } from "./knowledge/fetcher.js";
 import { KnowledgeIngester } from "./knowledge/ingester.js";
+import { dispatchTasks, type DispatchResult } from "./task-dispatcher.js";
 import { broadcast } from "./events.js";
 import { config } from "./config.js";
 
@@ -24,48 +26,29 @@ export type AgentLoopState = {
   totalCycles: number;
   lastCycleAt: string | null;
   lastCycleDurationMs: number | null;
+  lastDispatch: DispatchResult | null;
   errors: string[];
-  apiCallsThisWindow: number;
-  maxApiCallsPerWindow: number;
+  /** Whether task dispatch is enabled in the loop */
+  dispatchEnabled: boolean;
 };
 
 const loopState: AgentLoopState = {
   running: false,
-  intervalMs: Number(process.env.AGENT_LOOP_INTERVAL_MS ?? 30 * 60 * 1000), // 30 min default
+  intervalMs: Number(process.env.AGENT_LOOP_INTERVAL_MS ?? 30 * 60 * 1000),
   totalCycles: 0,
   lastCycleAt: null,
   lastCycleDurationMs: null,
+  lastDispatch: null,
   errors: [],
-  apiCallsThisWindow: 0,
-  maxApiCallsPerWindow: Number(process.env.AGENT_LOOP_MAX_API_CALLS ?? 100),
+  dispatchEnabled: process.env.TASK_DISPATCH_IN_LOOP !== "0",
 };
 
 let loopTimer: NodeJS.Timeout | null = null;
-let windowResetTimer: NodeJS.Timeout | null = null;
 
-/** Track an API call for rate limiting */
-export function trackApiCall(): void {
-  loopState.apiCallsThisWindow++;
-}
-
-/** Check if we're approaching rate limits */
-function isRateLimited(): boolean {
-  return loopState.apiCallsThisWindow >= loopState.maxApiCallsPerWindow;
-}
-
-/** Single cycle: fetch knowledge sources → ingest → run agent */
+/** Single cycle: fetch knowledge → run agent → dispatch tasks */
 async function runCycle(): Promise<void> {
   if (getAgentState().running) {
     console.log("[agent-loop] skipping cycle — agent already running");
-    return;
-  }
-
-  if (isRateLimited()) {
-    console.log(`[agent-loop] skipping cycle — rate limit (${loopState.apiCallsThisWindow}/${loopState.maxApiCallsPerWindow} calls)`);
-    broadcast("agent-loop:rate-limited", {
-      calls: loopState.apiCallsThisWindow,
-      max: loopState.maxApiCallsPerWindow,
-    });
     return;
   }
 
@@ -87,6 +70,18 @@ async function runCycle(): Promise<void> {
     console.log("[agent-loop] phase 2: running agent...");
     const agentResult = await runAgent();
 
+    // Phase 3: Dispatch executable tasks
+    let dispatchResult: DispatchResult | null = null;
+    if (loopState.dispatchEnabled && agentResult.generatedTasks.length > 0) {
+      console.log("[agent-loop] phase 3: dispatching tasks...");
+      dispatchResult = await dispatchTasks();
+      loopState.lastDispatch = dispatchResult;
+    } else if (!loopState.dispatchEnabled) {
+      console.log("[agent-loop] phase 3: task dispatch disabled (set TASK_DISPATCH_IN_LOOP=1)");
+    } else {
+      console.log("[agent-loop] phase 3: no tasks to dispatch");
+    }
+
     const elapsed = Date.now() - start;
     loopState.totalCycles++;
     loopState.lastCycleAt = new Date().toISOString();
@@ -95,7 +90,8 @@ async function runCycle(): Promise<void> {
     console.log(
       `[agent-loop] cycle #${loopState.totalCycles} complete in ${elapsed}ms — ` +
       `${agentResult.roadmapItems.length} items, ${agentResult.generatedTasks.length} tasks, ` +
-      `${agentResult.errors.length} errors`
+      `${agentResult.errors.length} errors` +
+      (dispatchResult ? `, ${dispatchResult.succeeded}/${dispatchResult.dispatched} dispatched` : "")
     );
 
     broadcast("agent-loop:cycle-complete", {
@@ -105,6 +101,11 @@ async function runCycle(): Promise<void> {
       tasks: agentResult.generatedTasks.length,
       errors: agentResult.errors.length,
       knowledgeFetched: fetchResult.fetched,
+      dispatch: dispatchResult ? {
+        dispatched: dispatchResult.dispatched,
+        succeeded: dispatchResult.succeeded,
+        failed: dispatchResult.failed,
+      } : null,
     });
   } catch (err) {
     const msg = (err as Error).message;
@@ -122,11 +123,6 @@ export function startAgentLoop(intervalMs?: number): AgentLoopState {
   loopState.running = true;
   loopState.errors = [];
 
-  // Reset API call counter every hour
-  windowResetTimer = setInterval(() => {
-    loopState.apiCallsThisWindow = 0;
-  }, 60 * 60 * 1000);
-
   // Run first cycle immediately, then on interval
   runCycle().catch((err) => console.error("[agent-loop] initial cycle failed:", err));
 
@@ -134,7 +130,7 @@ export function startAgentLoop(intervalMs?: number): AgentLoopState {
     runCycle().catch((err) => console.error("[agent-loop] cycle failed:", err));
   }, loopState.intervalMs);
 
-  console.log(`[agent-loop] started — interval: ${loopState.intervalMs}ms, max calls/window: ${loopState.maxApiCallsPerWindow}`);
+  console.log(`[agent-loop] started — interval: ${loopState.intervalMs}ms`);
   broadcast("agent-loop:started", { intervalMs: loopState.intervalMs });
 
   return loopState;
@@ -145,7 +141,6 @@ export function stopAgentLoop(): AgentLoopState {
   if (!loopState.running) return loopState;
 
   if (loopTimer) { clearInterval(loopTimer); loopTimer = null; }
-  if (windowResetTimer) { clearInterval(windowResetTimer); windowResetTimer = null; }
   loopState.running = false;
 
   console.log("[agent-loop] stopped");
@@ -162,11 +157,10 @@ export function getAgentLoopState(): AgentLoopState {
 /** Update loop configuration */
 export function updateLoopConfig(opts: {
   intervalMs?: number;
-  maxApiCallsPerWindow?: number;
+  dispatchEnabled?: boolean;
 }): AgentLoopState {
   if (opts.intervalMs) {
     loopState.intervalMs = opts.intervalMs;
-    // Restart timer if running
     if (loopState.running && loopTimer) {
       clearInterval(loopTimer);
       loopTimer = setInterval(() => {
@@ -174,8 +168,8 @@ export function updateLoopConfig(opts: {
       }, loopState.intervalMs);
     }
   }
-  if (opts.maxApiCallsPerWindow) {
-    loopState.maxApiCallsPerWindow = opts.maxApiCallsPerWindow;
+  if (opts.dispatchEnabled !== undefined) {
+    loopState.dispatchEnabled = opts.dispatchEnabled;
   }
   return { ...loopState };
 }
