@@ -550,8 +550,8 @@ app.get("/kpi/history", (req, res) => {
   res.json({ status: "success", data: getCycleHistory(limit) });
 });
 
-app.delete("/kpi", (_req, res) => {
-  resetKPIs();
+app.delete("/kpi", async (_req, res) => {
+  await resetKPIs();
   res.json({ status: "success", data: { cleared: true } });
 });
 
@@ -576,7 +576,7 @@ app.get("/healer/providers", (_req, res) => {
 await runStartupChecks(config.port);
 
 // Initialize KPI tracker (loads history from SQLite)
-initKPITracker();
+await initKPITracker();
 
 startKnowledgeWatcher();
 
