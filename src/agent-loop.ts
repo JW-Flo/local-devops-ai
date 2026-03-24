@@ -21,6 +21,9 @@ import { dispatchTasks, type DispatchResult } from "./task-dispatcher.js";
 import { updateRoadmaps, type RoadmapUpdate } from "./roadmap-updater.js";
 import { broadcast } from "./events.js";
 import { config } from "./config.js";
+import { recordCycle } from "./kpi-tracker.js";
+import { getStats as getRateLimiterStats } from "./rate-limiter.js";
+import { getHealerStats } from "./self-healer.js";
 
 export type AgentLoopState = {
   running: boolean;
@@ -103,6 +106,36 @@ async function runCycle(): Promise<void> {
     loopState.totalCycles++;
     loopState.lastCycleAt = new Date().toISOString();
     loopState.lastCycleDurationMs = elapsed;
+
+    // Record KPIs for this cycle
+    const rateLimiterStats = getRateLimiterStats();
+    const healerStats = getHealerStats();
+    const tokenUsage = {
+      totalTokens:
+        (rateLimiterStats.openrouter?.usage?.hourly?.totalTokens ?? 0) +
+        (rateLimiterStats.bedrock?.usage?.hourly?.totalTokens ?? 0) +
+        (rateLimiterStats.ollama?.usage?.hourly?.totalTokens ?? 0),
+      estimatedCostUsd:
+        (rateLimiterStats.openrouter?.usage?.hourly?.estimatedCostUsd ?? 0) +
+        (rateLimiterStats.bedrock?.usage?.hourly?.estimatedCostUsd ?? 0),
+    };
+
+    const circuitBreakerTrips = Object.values(healerStats.providerHealth)
+      .filter((h: any) => h.disabled || h.recoveryMode).length;
+
+    recordCycle({
+      durationMs: elapsed,
+      roadmapItemsParsed: agentResult.roadmapItems.length,
+      tasksGenerated: agentResult.generatedTasks.length,
+      dispatch: dispatchResult,
+      agentErrors: agentResult.errors.length,
+      providerFailures: healerStats.byCategory?.["provider-failure"] ?? 0,
+      circuitBreakerTrips,
+      roadmapItemsCompleted: roadmapUpdates
+        .reduce((s, r) => s + r.itemsMarkedDone.length, 0),
+      reposUpdated: roadmapUpdates.filter((r) => r.updated).length,
+      tokenUsage,
+    });
 
     console.log(
       `[agent-loop] cycle #${loopState.totalCycles} complete in ${elapsed}ms — ` +

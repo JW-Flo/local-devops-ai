@@ -43,6 +43,9 @@ import {
   getStats as getRateLimiterStats,
   resetRateLimiter,
 } from "./rate-limiter.js";
+import {
+  initKPITracker, getKPIDashboard, getCycleHistory, resetKPIs,
+} from "./kpi-tracker.js";
 
 const app = express();
 app.use(cors());
@@ -536,6 +539,22 @@ app.put("/github/merge/:owner/:repo/:prNumber", async (req, res) => {
   } catch (err) { res.status(500).json({ status: "error", message: (err as Error).message }); }
 });
 
+// ── KPI Dashboard ──
+
+app.get("/kpi", (_req, res) => {
+  res.json({ status: "success", data: getKPIDashboard() });
+});
+
+app.get("/kpi/history", (req, res) => {
+  const limit = Number(req.query.limit ?? 20);
+  res.json({ status: "success", data: getCycleHistory(limit) });
+});
+
+app.delete("/kpi", (_req, res) => {
+  resetKPIs();
+  res.json({ status: "success", data: { cleared: true } });
+});
+
 // ── Self-Healer ──
 
 app.get("/healer/stats", (_req, res) => {
@@ -555,6 +574,9 @@ app.get("/healer/providers", (_req, res) => {
 
 // Self-heal: resolve port conflicts and run checks BEFORE binding
 await runStartupChecks(config.port);
+
+// Initialize KPI tracker (loads history from SQLite)
+initKPITracker();
 
 startKnowledgeWatcher();
 
