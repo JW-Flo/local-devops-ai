@@ -61,7 +61,7 @@ export class KnowledgeStore {
       .replace(/\0/g, '')
       .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ' ')
       // Remove ALL \xNN patterns (literal backslash + x + hex) — these break Qdrant JSON
-      .replace(/\\x[0-9a-fA-F]{0,2}/g, '')
+      .replace(/\\x[0-9a-fA-F]{1,2}/g, '')
       // Remove incomplete \uNNNN patterns
       .replace(/\\u[0-9a-fA-F]{0,4}/g, '')
       // Remove other problematic escape sequences

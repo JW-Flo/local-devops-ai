@@ -36,6 +36,12 @@ type ProviderHealth = {
   lastSuccess: string | null;
   disabled: boolean;
   disabledUntil: string | null;
+  /** After cooldown, ramp up gradually: only allow 1-in-N requests through */
+  recoveryMode: boolean;
+  /** Fraction of requests allowed during recovery (0.0 to 1.0) */
+  recoveryRate: number;
+  /** Successful requests during recovery (resets to full health at threshold) */
+  recoverySuccesses: number;
 };
 
 // ── State ──
@@ -44,15 +50,27 @@ const issues: IssueRecord[] = [];
 const ISSUES_COLLECTION = "gateway_issues";
 const MAX_MEMORY_ISSUES = 200;
 
+function freshHealth(name: string): ProviderHealth {
+  return {
+    name, consecutiveFailures: 0, lastFailure: null, lastSuccess: null,
+    disabled: false, disabledUntil: null,
+    recoveryMode: false, recoveryRate: 1.0, recoverySuccesses: 0,
+  };
+}
+
 const providerHealth: Record<string, ProviderHealth> = {
-  openrouter: { name: "openrouter", consecutiveFailures: 0, lastFailure: null, lastSuccess: null, disabled: false, disabledUntil: null },
-  bedrock: { name: "bedrock", consecutiveFailures: 0, lastFailure: null, lastSuccess: null, disabled: false, disabledUntil: null },
-  ollama: { name: "ollama", consecutiveFailures: 0, lastFailure: null, lastSuccess: null, disabled: false, disabledUntil: null },
+  openrouter: freshHealth("openrouter"),
+  bedrock: freshHealth("bedrock"),
+  ollama: freshHealth("ollama"),
 };
 
 // Circuit breaker thresholds
 const CIRCUIT_BREAK_THRESHOLD = 5; // consecutive failures before temporary disable
 const CIRCUIT_BREAK_COOLDOWN_MS = 5 * 60 * 1000; // 5 min cooldown
+/** Successful requests needed during recovery to return to full health */
+const RECOVERY_SUCCESS_THRESHOLD = 3;
+/** Initial recovery rate after cooldown (25% of traffic) */
+const RECOVERY_INITIAL_RATE = 0.25;
 
 // ── Qdrant Issues Store ──
 
@@ -273,10 +291,29 @@ export function reportProviderSuccess(provider: string): void {
   if (!health) return;
   health.consecutiveFailures = 0;
   health.lastSuccess = new Date().toISOString();
+
   if (health.disabled) {
+    // Shouldn't happen — disabled providers don't get requests
     health.disabled = false;
     health.disabledUntil = null;
+    health.recoveryMode = false;
+    health.recoveryRate = 1.0;
+    health.recoverySuccesses = 0;
     console.log(`[self-healer] provider ${provider} re-enabled after success`);
+  } else if (health.recoveryMode) {
+    // Gradual ramp-up: count successes during recovery
+    health.recoverySuccesses++;
+    if (health.recoverySuccesses >= RECOVERY_SUCCESS_THRESHOLD) {
+      // Graduated to full health
+      health.recoveryMode = false;
+      health.recoveryRate = 1.0;
+      health.recoverySuccesses = 0;
+      console.log(`[self-healer] provider ${provider} fully recovered after ${RECOVERY_SUCCESS_THRESHOLD} successes`);
+    } else {
+      // Ramp up: 25% → 50% → 75% → 100%
+      health.recoveryRate = Math.min(1.0, RECOVERY_INITIAL_RATE + (health.recoverySuccesses / RECOVERY_SUCCESS_THRESHOLD) * (1.0 - RECOVERY_INITIAL_RATE));
+      console.log(`[self-healer] provider ${provider} recovery: ${Math.round(health.recoveryRate * 100)}% traffic (${health.recoverySuccesses}/${RECOVERY_SUCCESS_THRESHOLD} successes)`);
+    }
   }
 }
 
@@ -305,15 +342,26 @@ export async function reportProviderFailure(provider: string, error: string): Pr
 export function isProviderAvailable(provider: string): boolean {
   const health = providerHealth[provider];
   if (!health) return true;
-  if (!health.disabled) return true;
 
-  // Check if cooldown has expired
-  if (health.disabledUntil && new Date() > new Date(health.disabledUntil)) {
+  // Fully healthy
+  if (!health.disabled && !health.recoveryMode) return true;
+
+  // In recovery mode — probabilistic gating
+  if (!health.disabled && health.recoveryMode) {
+    return Math.random() < health.recoveryRate;
+  }
+
+  // Check if cooldown has expired → enter recovery mode (not instant full health)
+  if (health.disabled && health.disabledUntil && new Date() > new Date(health.disabledUntil)) {
     health.disabled = false;
     health.disabledUntil = null;
     health.consecutiveFailures = 0;
-    console.log(`[self-healer] provider ${provider} cooldown expired, re-enabling`);
-    return true;
+    // Enter recovery mode instead of instant full health
+    health.recoveryMode = true;
+    health.recoveryRate = RECOVERY_INITIAL_RATE;
+    health.recoverySuccesses = 0;
+    console.log(`[self-healer] provider ${provider} cooldown expired, entering recovery mode (${Math.round(RECOVERY_INITIAL_RATE * 100)}% traffic)`);
+    return Math.random() < health.recoveryRate;
   }
 
   return false;
@@ -370,12 +418,14 @@ export async function runStartupChecks(port: number): Promise<void> {
   // 2. Ensure Qdrant issues collection
   await ensureIssuesCollection();
 
-  // 3. Check provider availability
+  // 3. Check provider availability — full reset on fresh startup
   for (const [name, health] of Object.entries(providerHealth)) {
-    // Reset disabled state on fresh startup
     health.disabled = false;
     health.disabledUntil = null;
     health.consecutiveFailures = 0;
+    health.recoveryMode = false;
+    health.recoveryRate = 1.0;
+    health.recoverySuccesses = 0;
   }
 
   // 4. Check Qdrant connectivity
@@ -437,13 +487,16 @@ export function startWatchdog(intervalMs = 30_000): void {
       console.log(`[self-healer] watchdog found ${hung} hung requests`);
     }
 
-    // Re-enable circuit-broken providers if cooldown expired
+    // Re-enable circuit-broken providers if cooldown expired → recovery mode
     for (const health of Object.values(providerHealth)) {
       if (health.disabled && health.disabledUntil && new Date() > new Date(health.disabledUntil)) {
         health.disabled = false;
         health.disabledUntil = null;
         health.consecutiveFailures = 0;
-        console.log(`[self-healer] watchdog re-enabled provider ${health.name}`);
+        health.recoveryMode = true;
+        health.recoveryRate = RECOVERY_INITIAL_RATE;
+        health.recoverySuccesses = 0;
+        console.log(`[self-healer] watchdog: ${health.name} → recovery mode (${Math.round(RECOVERY_INITIAL_RATE * 100)}% traffic)`);
       }
     }
   }, intervalMs);
