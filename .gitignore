@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+*.log
+_*.py
+_*.bat
+kill-port.bat
+test-ollama.bat
+tsc-check.bat
+run-gateway.cmd
+restart.bat
+roadmap-check.json
