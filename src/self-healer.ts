@@ -12,7 +12,7 @@
  * learns from failures and prevents recurrence.
  */
 
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
 import { config } from "./config.js";
 import { broadcast } from "./events.js";
 
@@ -71,6 +71,160 @@ const CIRCUIT_BREAK_COOLDOWN_MS = 5 * 60 * 1000; // 5 min cooldown
 const RECOVERY_SUCCESS_THRESHOLD = 3;
 /** Initial recovery rate after cooldown (25% of traffic) */
 const RECOVERY_INITIAL_RATE = 0.25;
+
+// ── Service Auto-Recovery ──
+
+type ServiceState = {
+  name: string;
+  url: string;
+  healthPath: string;
+  lastCheck: number;
+  lastUp: number;
+  consecutiveDownChecks: number;
+  restartAttempts: number;
+  lastRestartAttempt: number;
+  maxRestartAttempts: number;
+  restartCooldownMs: number;
+};
+
+const serviceStates: Record<string, ServiceState> = {
+  qdrant: {
+    name: "qdrant",
+    url: config.qdrantUrl || "http://127.0.0.1:6333",
+    healthPath: "/collections",
+    lastCheck: 0,
+    lastUp: 0,
+    consecutiveDownChecks: 0,
+    restartAttempts: 0,
+    lastRestartAttempt: 0,
+    maxRestartAttempts: 3,
+    restartCooldownMs: 5 * 60 * 1000,
+  },
+  ollama: {
+    name: "ollama",
+    url: config.ollamaHost || "http://127.0.0.1:11434",
+    healthPath: "/api/tags",
+    lastCheck: 0,
+    lastUp: 0,
+    consecutiveDownChecks: 0,
+    restartAttempts: 0,
+    lastRestartAttempt: 0,
+    maxRestartAttempts: 3,
+    restartCooldownMs: 5 * 60 * 1000,
+  },
+};
+
+async function pingService(svc: ServiceState): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(`${svc.url}${svc.healthPath}`, { signal: controller.signal });
+    clearTimeout(timeout);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function restartService(svc: ServiceState): Promise<boolean> {
+  const now = Date.now();
+  const isWindows = process.platform === "win32";
+
+  if (now - svc.lastRestartAttempt < svc.restartCooldownMs) return false;
+  if (svc.restartAttempts >= svc.maxRestartAttempts) return false;
+
+  svc.lastRestartAttempt = now;
+  svc.restartAttempts++;
+
+  console.log(`[self-healer] attempting to restart ${svc.name} (attempt ${svc.restartAttempts}/${svc.maxRestartAttempts})...`);
+
+  try {
+    if (svc.name === "ollama") {
+      const ollamaPaths = isWindows
+        ? [`${process.env.LOCALAPPDATA || "C:\\Users\\joewh\\AppData\\Local"}\\Programs\\Ollama\\ollama.exe`, "ollama"]
+        : ["ollama"];
+      for (const ollamaPath of ollamaPaths) {
+        try {
+          const child = spawn(ollamaPath, ["serve"], { detached: true, stdio: "ignore", shell: true });
+          child.unref();
+          await new Promise((r) => setTimeout(r, 5000));
+          if (await pingService(svc)) {
+            await logIssue("ollama-error", "info",
+              `Ollama auto-restarted successfully (attempt ${svc.restartAttempts})`,
+              `Service restored at ${svc.url}`, { path: ollamaPath, attempt: svc.restartAttempts }, true);
+            svc.consecutiveDownChecks = 0;
+            svc.lastUp = Date.now();
+            return true;
+          }
+        } catch { /* try next path */ }
+      }
+    }
+
+    if (svc.name === "qdrant") {
+      try {
+        execSync("docker info", { timeout: 10000, stdio: "pipe" });
+        const containers = execSync('docker ps -a --filter name=qdrant --format "{{.Names}}:{{.Status}}"', {
+          encoding: "utf8", timeout: 5000,
+        }).trim();
+        if (containers.includes("qdrant")) {
+          execSync("docker start qdrant", { timeout: 15000 });
+        } else {
+          execSync(
+            "docker run -d --name qdrant -p 6333:6333 -p 6334:6334 -v qdrant_storage:/qdrant/storage qdrant/qdrant",
+            { timeout: 60000 },
+          );
+        }
+        await new Promise((r) => setTimeout(r, 8000));
+        if (await pingService(svc)) {
+          await logIssue("qdrant-error", "info",
+            `Qdrant auto-restarted via Docker`, `Service restored at ${svc.url}`,
+            { method: containers.includes("qdrant") ? "docker start" : "docker run" }, true);
+          svc.consecutiveDownChecks = 0;
+          svc.lastUp = Date.now();
+          return true;
+        }
+      } catch (dockerErr) {
+        console.log(`[self-healer] Docker not available for Qdrant restart: ${(dockerErr as Error).message?.slice(0, 80)}`);
+      }
+    }
+
+    await logIssue(
+      svc.name === "qdrant" ? "qdrant-error" : "ollama-error", "warning",
+      `Failed to auto-restart ${svc.name} (attempt ${svc.restartAttempts}/${svc.maxRestartAttempts})`,
+      svc.restartAttempts >= svc.maxRestartAttempts
+        ? "Max restart attempts reached. Manual intervention required."
+        : `Will retry after ${svc.restartCooldownMs / 1000}s cooldown.`,
+      { attempt: svc.restartAttempts }, false);
+    return false;
+  } catch (err) {
+    console.warn(`[self-healer] restart ${svc.name} error: ${(err as Error).message}`);
+    return false;
+  }
+}
+
+async function checkServiceHealth(): Promise<void> {
+  for (const svc of Object.values(serviceStates)) {
+    svc.lastCheck = Date.now();
+    const up = await pingService(svc);
+    if (up) {
+      if (svc.consecutiveDownChecks > 0) {
+        console.log(`[self-healer] ${svc.name} recovered (was down for ${svc.consecutiveDownChecks} checks)`);
+        svc.restartAttempts = 0;
+      }
+      svc.consecutiveDownChecks = 0;
+      svc.lastUp = Date.now();
+    } else {
+      svc.consecutiveDownChecks++;
+      if (svc.consecutiveDownChecks >= 2) {
+        await restartService(svc);
+      }
+    }
+  }
+}
+
+export function getServiceStates(): Record<string, ServiceState> {
+  return { ...serviceStates };
+}
 
 // ── Qdrant Issues Store ──
 
@@ -499,6 +653,9 @@ export function startWatchdog(intervalMs = 30_000): void {
         console.log(`[self-healer] watchdog: ${health.name} → recovery mode (${Math.round(RECOVERY_INITIAL_RATE * 100)}% traffic)`);
       }
     }
+
+    // Check infrastructure services (Qdrant, Ollama) and auto-restart if down
+    await checkServiceHealth();
   }, intervalMs);
 
   console.log(`[self-healer] watchdog started (${intervalMs}ms interval)`);

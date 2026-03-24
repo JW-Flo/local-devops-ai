@@ -37,7 +37,7 @@ import {
 } from "./knowledge/fetcher.js";
 import {
   runStartupChecks, startWatchdog, logIssue, resolvePortConflict,
-  getIssues, getHealerStats, getProviderHealth,
+  getIssues, getHealerStats, getProviderHealth, getServiceStates,
 } from "./self-healer.js";
 import {
   getStats as getRateLimiterStats,
@@ -568,6 +568,10 @@ app.get("/healer/issues", (req, res) => {
 
 app.get("/healer/providers", (_req, res) => {
   res.json({ status: "success", data: getProviderHealth() });
+});
+
+app.get("/healer/services", (_req, res) => {
+  res.json({ status: "success", data: getServiceStates() });
 });
 
 // ── Startup ──
