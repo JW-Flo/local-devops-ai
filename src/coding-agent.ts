@@ -13,6 +13,7 @@ import { broadcast } from "./events.js";
 import { callBedrock } from "./bedrock.js";
 import { callOpenRouter } from "./openrouter.js";
 import { isProviderAvailable } from "./self-healer.js";
+import { recommendProvider, type ProviderName } from "./rate-limiter.js";
 import type { GeneratedTask } from "./agent.js";
 
 export type CodingResult = {
@@ -37,48 +38,62 @@ async function readTargetFiles(
   return files;
 }
 
-/** Call LLM with provider fallback chain for code generation */
+/** Call LLM with smart routing for code generation */
 async function callCodeLLM(system: string, user: string): Promise<string> {
-  // Prefer OpenRouter free models for code gen (saves cost)
-  if (config.useOpenRouter && isProviderAvailable("openrouter")) {
+  const rec = recommendProvider();
+
+  if (rec.delayMs > 0) {
+    console.log(`[coding-agent] waiting ${Math.ceil(rec.delayMs / 1000)}s for ${rec.provider} — ${rec.reason}`);
+    await new Promise((r) => setTimeout(r, rec.delayMs));
+  }
+
+  console.log(`[coding-agent] smart-route → ${rec.provider} (${rec.reason})`);
+
+  const providers: ProviderName[] = [rec.provider];
+  if (rec.provider !== "openrouter" && config.useOpenRouter && isProviderAvailable("openrouter")) providers.push("openrouter");
+  if (rec.provider !== "bedrock" && config.useBedrock && isProviderAvailable("bedrock")) providers.push("bedrock");
+  if (rec.provider !== "ollama") providers.push("ollama");
+
+  for (const provider of providers) {
     try {
-      return await callOpenRouter(system, user, { temp: 0.1, maxTokens: 4096 });
+      switch (provider) {
+        case "openrouter":
+          if (!isProviderAvailable("openrouter")) continue;
+          return await callOpenRouter(system, user, { temp: 0.1, maxTokens: 4096 });
+        case "bedrock":
+          if (!isProviderAvailable("bedrock")) continue;
+          return await callBedrock(system, user, { temp: 0.1, maxTokens: 4096 });
+        case "ollama": {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 300_000);
+          try {
+            const res = await fetch(`${config.ollamaHost}/api/chat`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              signal: controller.signal,
+              body: JSON.stringify({
+                model: config.codeModel,
+                messages: [
+                  { role: "system", content: system },
+                  { role: "user", content: user },
+                ],
+                stream: false,
+                options: { temperature: 0.1, num_ctx: 3072, num_gpu: Number(process.env.OLLAMA_NUM_GPU ?? 28) },
+              }),
+            });
+            clearTimeout(timeout);
+            if (!res.ok) throw new Error(`Ollama ${res.status}`);
+            const data = (await res.json()) as any;
+            return data.message?.content ?? "";
+          } finally { clearTimeout(timeout); }
+        }
+      }
     } catch (err) {
-      console.warn(`[coding-agent] openrouter failed, falling back: ${(err as Error).message}`);
+      console.warn(`[coding-agent] ${provider} failed, trying next: ${(err as Error).message.slice(0, 100)}`);
     }
   }
 
-  if (config.useBedrock && isProviderAvailable("bedrock")) {
-    try {
-      return await callBedrock(system, user, { temp: 0.1, maxTokens: 4096 });
-    } catch (err) {
-      console.warn(`[coding-agent] bedrock failed, falling back: ${(err as Error).message}`);
-    }
-  }
-
-  // Ollama CPU fallback
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 300_000);
-  try {
-    const res = await fetch(`${config.ollamaHost}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: config.codeModel,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        stream: false,
-        options: { temperature: 0.1, num_ctx: 3072, num_gpu: Number(process.env.OLLAMA_NUM_GPU ?? 28) },
-      }),
-    });
-    clearTimeout(timeout);
-    if (!res.ok) throw new Error(`Ollama ${res.status}`);
-    const data = (await res.json()) as any;
-    return data.message?.content ?? "";
-  } finally { clearTimeout(timeout); }
+  throw new Error("All LLM providers exhausted for code generation");
 }
 
 async function generateCode(

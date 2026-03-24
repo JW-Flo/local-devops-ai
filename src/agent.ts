@@ -6,6 +6,7 @@ import { broadcast } from "./events.js";
 import { callBedrock } from "./bedrock.js";
 import { callOpenRouter } from "./openrouter.js";
 import { isProviderAvailable, logIssue } from "./self-healer.js";
+import { recommendProvider, recordUsage, type ProviderName } from "./rate-limiter.js";
 
 export type RoadmapItem = {
   id: string;
@@ -72,34 +73,18 @@ const TOOL_CATALOG = [
   { name: "observability", desc: "prometheus/loki/grafana queries" },
 ];
 
-// ── Multi-Provider LLM Routing ──
+// ── Smart Multi-Provider LLM Routing ──
+// Uses rate-limiter.ts to decide the best provider BEFORE calling.
+// No more blind burst → 429 → paid fallback cascade.
 
 /**
- * Call LLM via the configured provider chain.
- * Priority: config.llmProvider selects primary, with automatic fallback.
- *   bedrock → openrouter → ollama
+ * Call Ollama (CPU fallback, always available, zero cost).
  */
-async function callLLM(system: string, user: string, opts?: { temp?: number; ctx?: number }): Promise<string> {
-  const provider = config.llmProvider;
-
-  // Try primary provider (circuit breaker aware)
-  if (provider === "bedrock" && isProviderAvailable("bedrock")) {
-    try {
-      return await callBedrock(system, user, { temp: opts?.temp, maxTokens: opts?.ctx ?? config.maxTokens });
-    } catch (err) {
-      console.warn(`[llm] bedrock failed, falling back: ${(err as Error).message}`);
-    }
-  }
-
-  if ((provider === "openrouter" || (provider === "bedrock" && config.useOpenRouter)) && isProviderAvailable("openrouter")) {
-    try {
-      return await callOpenRouter(system, user, { temp: opts?.temp, maxTokens: opts?.ctx ?? config.maxTokens });
-    } catch (err) {
-      console.warn(`[llm] openrouter failed, falling back: ${(err as Error).message}`);
-    }
-  }
-
-  // Ollama fallback (CPU-only)
+async function callOllama(
+  system: string, user: string,
+  opts?: { temp?: number; ctx?: number; model?: string }
+): Promise<string> {
+  const model = opts?.model ?? config.primaryModel;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 300_000);
   try {
@@ -108,13 +93,17 @@ async function callLLM(system: string, user: string, opts?: { temp?: number; ctx
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,
       body: JSON.stringify({
-        model: config.primaryModel,
+        model,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
         ],
         stream: false,
-        options: { temperature: opts?.temp ?? 0.1, num_ctx: opts?.ctx ?? 2048, num_gpu: Number(process.env.OLLAMA_NUM_GPU ?? 28) },
+        options: {
+          temperature: opts?.temp ?? 0.1,
+          num_ctx: opts?.ctx ?? 2048,
+          num_gpu: Number(process.env.OLLAMA_NUM_GPU ?? 28),
+        },
       }),
     });
     if (!res.ok) {
@@ -126,54 +115,79 @@ async function callLLM(system: string, user: string, opts?: { temp?: number; ctx
   } finally { clearTimeout(timeout); }
 }
 
-/** Fast model — same provider chain as callLLM */
+/**
+ * Route a request to the recommended provider with smart fallback.
+ * The rate-limiter decides which provider to use based on:
+ *   - OpenRouter rate limit state (pacing, cooldowns)
+ *   - Bedrock cost budget (hourly/daily caps)
+ *   - Availability (circuit breakers)
+ */
+async function smartRoute(
+  system: string, user: string,
+  opts?: { temp?: number; ctx?: number }
+): Promise<string> {
+  const rec = recommendProvider();
+
+  // If the recommended provider needs a delay, wait for it
+  if (rec.delayMs > 0) {
+    console.log(`[llm] smart-route: waiting ${Math.ceil(rec.delayMs / 1000)}s for ${rec.provider} — ${rec.reason}`);
+    await new Promise((r) => setTimeout(r, rec.delayMs));
+  }
+
+  console.log(`[llm] smart-route → ${rec.provider} (${rec.reason})`);
+
+  // Attempt the recommended provider, then fall through on failure
+  const providers: ProviderName[] = [rec.provider];
+  // Add fallbacks in order (skip the one we already tried)
+  if (rec.provider !== "openrouter" && config.useOpenRouter && isProviderAvailable("openrouter")) {
+    providers.push("openrouter");
+  }
+  if (rec.provider !== "bedrock" && config.useBedrock && isProviderAvailable("bedrock")) {
+    providers.push("bedrock");
+  }
+  if (rec.provider !== "ollama") {
+    providers.push("ollama");
+  }
+
+  for (const provider of providers) {
+    try {
+      switch (provider) {
+        case "openrouter":
+          if (!isProviderAvailable("openrouter")) continue;
+          return await callOpenRouter(system, user, {
+            temp: opts?.temp,
+            maxTokens: opts?.ctx ?? config.maxTokens,
+          });
+        case "bedrock":
+          if (!isProviderAvailable("bedrock")) continue;
+          return await callBedrock(system, user, {
+            temp: opts?.temp,
+            maxTokens: opts?.ctx ?? config.maxTokens,
+          });
+        case "ollama":
+          return await callOllama(system, user, opts);
+      }
+    } catch (err) {
+      console.warn(`[llm] ${provider} failed, trying next: ${(err as Error).message.slice(0, 100)}`);
+    }
+  }
+
+  throw new Error("All LLM providers exhausted");
+}
+
+/**
+ * Call LLM via smart routing.
+ * Rate-limit-aware: paces requests, respects budgets, minimizes cost.
+ */
+async function callLLM(system: string, user: string, opts?: { temp?: number; ctx?: number }): Promise<string> {
+  return smartRoute(system, user, opts);
+}
+
+/**
+ * Fast model — same smart routing, prefers free models.
+ */
 async function callFastLLM(system: string, user: string, opts?: { temp?: number; ctx?: number }): Promise<string> {
-  // For fast calls, prefer OpenRouter free models when available (saves Bedrock cost)
-  if (config.useOpenRouter && isProviderAvailable("openrouter")) {
-    try {
-      return await callOpenRouter(system, user, {
-        temp: opts?.temp,
-        maxTokens: opts?.ctx ?? config.maxTokens,
-        model: config.openrouterModel, // free model
-      });
-    } catch (err) {
-      console.warn(`[llm-fast] openrouter failed, falling back: ${(err as Error).message}`);
-    }
-  }
-
-  if (config.useBedrock && isProviderAvailable("bedrock")) {
-    try {
-      return await callBedrock(system, user, { temp: opts?.temp, maxTokens: opts?.ctx ?? config.maxTokens });
-    } catch (err) {
-      console.warn(`[llm-fast] bedrock failed, falling back: ${(err as Error).message}`);
-    }
-  }
-
-  // Ollama CPU fallback
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 300_000);
-  try {
-    const res = await fetch(`${config.ollamaHost}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: config.fastModel,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        stream: false,
-        options: { temperature: opts?.temp ?? 0.1, num_ctx: opts?.ctx ?? 2048, num_gpu: 0 },
-      }),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`Ollama fast ${res.status}: ${body.slice(0, 200)}`);
-    }
-    const data = (await res.json()) as any;
-    return data.message?.content ?? "";
-  } finally { clearTimeout(timeout); }
+  return smartRoute(system, user, opts);
 }
 
 // ── Helpers ──

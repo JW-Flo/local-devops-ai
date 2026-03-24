@@ -4,6 +4,7 @@ import {
 } from "@aws-sdk/client-bedrock-runtime";
 import { config } from "./config.js";
 import { reportProviderSuccess, reportProviderFailure, isProviderAvailable } from "./self-healer.js";
+import { recordUsage } from "./rate-limiter.js";
 
 let client: BedrockRuntimeClient | null = null;
 
@@ -38,10 +39,14 @@ export async function callBedrock(
     const text = resp.output?.message?.content?.[0]?.text ?? "";
     const usage = resp.usage;
 
+    const inputTokens = usage?.inputTokens ?? 0;
+    const outputTokens = usage?.outputTokens ?? 0;
     console.log(
-      `[bedrock] ${config.bedrockModel} | ${usage?.inputTokens ?? 0}in/${usage?.outputTokens ?? 0}out`
+      `[bedrock] ${config.bedrockModel} | ${inputTokens}in/${outputTokens}out`
     );
 
+    // Track cost in rate-limiter ledger
+    recordUsage("bedrock", inputTokens, outputTokens);
     reportProviderSuccess("bedrock");
     return text;
   } catch (err) {

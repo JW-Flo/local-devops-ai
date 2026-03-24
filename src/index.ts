@@ -32,6 +32,10 @@ import {
   runStartupChecks, startWatchdog, logIssue, resolvePortConflict,
   getIssues, getHealerStats, getProviderHealth,
 } from "./self-healer.js";
+import {
+  getStats as getRateLimiterStats,
+  resetRateLimiter,
+} from "./rate-limiter.js";
 
 const app = express();
 app.use(cors());
@@ -329,6 +333,17 @@ app.get("/llm/status", (_req, res) => {
       },
     },
   });
+});
+
+// ── LLM Usage & Rate Limit Intelligence ──
+
+app.get("/llm/usage", (_req, res) => {
+  res.json({ status: "success", data: getRateLimiterStats() });
+});
+
+app.post("/llm/usage/reset", (_req, res) => {
+  resetRateLimiter();
+  res.json({ status: "success", message: "Rate limiter state reset" });
 });
 
 // ── GitHub Connector (dynamic owner/repo) ──
