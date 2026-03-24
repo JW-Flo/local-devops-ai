@@ -123,7 +123,53 @@ Return JSON array of file changes:`;
     const raw = await callCodeLLM(system, user);
     const arrayMatch = raw.match(/\[[\s\S]*\]/);
     if (!arrayMatch) return [];
-    const changes = JSON.parse(arrayMatch[0]) as any[];
+
+    // Sanitize control characters that Bedrock 8B injects into JSON string values
+    // Only strip true control chars (not \n \r \t which are structural JSON whitespace)
+    const stripped = arrayMatch[0]
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ' ');
+
+    let changes: any[];
+    try {
+      changes = JSON.parse(stripped) as any[];
+    } catch (firstErr) {
+      // Debug: log raw response to understand what Bedrock returns
+      console.warn(`[coding-agent] JSON parse failed: ${(firstErr as Error).message}`);
+      console.warn(`[coding-agent] Raw LLM (first 300 chars): ${JSON.stringify(stripped.slice(0, 300))}`);
+      // Fallback: fix control chars INSIDE JSON string values only
+      // Walk the string, track whether we're inside a quoted value
+      console.warn('[coding-agent] JSON parse retry with string-aware sanitization');
+      let fixed = '';
+      let inString = false;
+      let escaped = false;
+      for (let i = 0; i < stripped.length; i++) {
+        const ch = stripped[i];
+        if (escaped) { escaped = false; fixed += ch; continue; }
+        if (ch === '\\' && inString) { escaped = true; fixed += ch; continue; }
+        if (ch === '"') { inString = !inString; fixed += ch; continue; }
+        if (inString && (ch === '\n' || ch === '\r' || ch === '\t')) {
+          // Escape literal whitespace chars inside JSON strings
+          fixed += ch === '\n' ? '\\n' : ch === '\r' ? '\\r' : '\\t';
+          continue;
+        }
+        // Replace backticks with quotes if LLM used template literals
+        if (inString && ch === '`') { fixed += "'"; continue; }
+        fixed += ch;
+      }
+      try {
+        changes = JSON.parse(fixed) as any[];
+      } catch {
+        // Last resort: extract code blocks from markdown fences
+        console.warn('[coding-agent] JSON parse failed, trying markdown extraction');
+        const mdBlocks = stripped.matchAll(/```(?:\w+)?\n([\s\S]*?)```/g);
+        const extracted: any[] = [];
+        for (const m of mdBlocks) {
+          extracted.push({ path: 'extracted.ts', content: m[1].trim(), action: 'create' });
+        }
+        changes = extracted.length ? extracted : JSON.parse(stripped); // re-throw original
+      }
+    }
+
     return changes
       .filter((c: any) => c.path && c.content)
       .map((c: any) => ({
