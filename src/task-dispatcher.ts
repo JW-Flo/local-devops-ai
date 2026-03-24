@@ -20,6 +20,7 @@ import { getAgentState, type GeneratedTask, type AgentState } from "./agent.js";
 import { memoryStore } from "./memory/store.js";
 import { broadcast } from "./events.js";
 import { recommendProvider } from "./rate-limiter.js";
+import { remediateTask, type RemediationRecord } from "./task-remediator.js";
 import { config } from "./config.js";
 
 // ── Types ──
@@ -32,10 +33,12 @@ export type DispatchResult = {
   results: Array<{
     taskId: string;
     title: string;
-    status: "success" | "failed" | "skipped" | "dry-run";
+    status: "success" | "failed" | "skipped" | "dry-run" | "remediated";
     result?: CodingResult;
     reason?: string;
+    remediation?: RemediationRecord;
   }>;
+  remediated: number;
   durationMs: number;
 };
 
@@ -50,6 +53,8 @@ export type DispatchConfig = {
   maxTasksPerCycle: number;
   /** Delay between task dispatches (ms) — pacing */
   interTaskDelayMs: number;
+  /** Enable auto-remediation of failed tasks */
+  remediationEnabled: boolean;
   /** Default owner/repo for task execution */
   defaultOwner: string;
   defaultRepo: string;
@@ -63,6 +68,7 @@ const dispatchConfig: DispatchConfig = {
   maxAutoComplexity: (process.env.TASK_DISPATCH_MAX_COMPLEXITY as any) ?? "small",
   maxTasksPerCycle: Number(process.env.TASK_DISPATCH_MAX_PER_CYCLE ?? 5),
   interTaskDelayMs: Number(process.env.TASK_DISPATCH_DELAY_MS ?? 5000),
+  remediationEnabled: process.env.TASK_DISPATCH_REMEDIATION !== "0",
   defaultOwner: process.env.TASK_DISPATCH_OWNER ?? "",
   defaultRepo: process.env.TASK_DISPATCH_REPO ?? "",
 };
@@ -134,7 +140,7 @@ function resolveRepo(task: GeneratedTask): { owner: string; repo: string } | nul
 export async function dispatchTasks(opts?: Partial<DispatchConfig>): Promise<DispatchResult> {
   if (dispatching) {
     return {
-      dispatched: 0, succeeded: 0, failed: 0, skipped: 0,
+      dispatched: 0, succeeded: 0, failed: 0, skipped: 0, remediated: 0,
       results: [{ taskId: "", title: "", status: "skipped", reason: "Dispatch already in progress" }],
       durationMs: 0,
     };
@@ -148,7 +154,7 @@ export async function dispatchTasks(opts?: Partial<DispatchConfig>): Promise<Dis
   broadcast("task-dispatcher:start", { dryRun: effectiveConfig.dryRun });
 
   const result: DispatchResult = {
-    dispatched: 0, succeeded: 0, failed: 0, skipped: 0,
+    dispatched: 0, succeeded: 0, failed: 0, skipped: 0, remediated: 0,
     results: [], durationMs: 0,
   };
 
@@ -242,6 +248,46 @@ export async function dispatchTasks(opts?: Partial<DispatchConfig>): Promise<Dis
             status: effectiveConfig.dryRun ? "dry-run" : "success",
             result: codingResult,
           });
+        } else if (effectiveConfig.remediationEnabled && codingResult.error) {
+          // ── Auto-remediation: retry with progressive strategies ──
+          console.log(`[task-dispatcher] task failed, invoking remediator: ${task.id}`);
+          try {
+            const remediation = await remediateTask(
+              task, repo.owner, repo.repo, codingResult.error,
+              { dryRun: effectiveConfig.dryRun },
+            );
+            if (remediation.resolved) {
+              result.remediated++;
+              result.succeeded++;
+              completedIds.add(task.id);
+              result.results.push({
+                taskId: task.id,
+                title: task.title,
+                status: "remediated",
+                result: remediation.finalResult,
+                remediation,
+              });
+            } else {
+              result.failed++;
+              result.results.push({
+                taskId: task.id,
+                title: task.title,
+                status: "failed",
+                result: codingResult,
+                reason: `Remediation exhausted (${remediation.attempts.length} attempts): ${codingResult.error}`,
+                remediation,
+              });
+            }
+          } catch (remErr) {
+            result.failed++;
+            result.results.push({
+              taskId: task.id,
+              title: task.title,
+              status: "failed",
+              result: codingResult,
+              reason: `Remediation error: ${(remErr as Error).message}`,
+            });
+          }
         } else {
           result.failed++;
           result.results.push({
@@ -287,6 +333,7 @@ export async function dispatchTasks(opts?: Partial<DispatchConfig>): Promise<Dis
     broadcast("task-dispatcher:complete", {
       dispatched: result.dispatched,
       succeeded: result.succeeded,
+      remediated: result.remediated,
       failed: result.failed,
       skipped: result.skipped,
       durationMs: result.durationMs,
@@ -294,7 +341,7 @@ export async function dispatchTasks(opts?: Partial<DispatchConfig>): Promise<Dis
 
     console.log(
       `[task-dispatcher] complete: ${result.dispatched} dispatched, ` +
-      `${result.succeeded} succeeded, ${result.failed} failed, ` +
+      `${result.succeeded} succeeded (${result.remediated} remediated), ${result.failed} failed, ` +
       `${result.skipped} skipped in ${result.durationMs}ms`
     );
   }
