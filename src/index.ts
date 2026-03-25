@@ -43,6 +43,8 @@ import {
   getStats as getRateLimiterStats,
   resetRateLimiter,
 } from "./rate-limiter.js";
+import { homeRouter } from "./home-automation/index.js";
+import { startPeriodicScan } from "./home-automation/network-scanner.js";
 import {
   initKPITracker, getKPIDashboard, getCycleHistory, resetKPIs,
 } from "./kpi-tracker.js";
@@ -555,6 +557,10 @@ app.delete("/kpi", async (_req, res) => {
   res.json({ status: "success", data: { cleared: true } });
 });
 
+// ── Home Automation ──
+
+app.use("/home", homeRouter);
+
 // ── Self-Healer ──
 
 app.get("/healer/stats", (_req, res) => {
@@ -583,6 +589,9 @@ await runStartupChecks(config.port);
 await initKPITracker();
 
 startKnowledgeWatcher();
+
+// Auto-start network scanner (5-min interval, initial quick scan)
+startPeriodicScan(300_000);
 
 // Auto-start knowledge fetch timer
 if (config.knowledgeFetchEnabled) {

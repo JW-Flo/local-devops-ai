@@ -13,7 +13,12 @@ export type EventType =
   | "coding-agent:start"
   | "coding-agent:generated"
   | "coding-agent:pr"
-  | "coding-agent:error";
+  | "coding-agent:error"
+  | "home:device:state"
+  | "home:scene:activated"
+  | "home:adapter:status"
+  | "home:network:scan"
+  | "home:network:device";
 
 export type SSEPayload = {
   type: EventType;

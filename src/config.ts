@@ -41,6 +41,14 @@ type Config = {
   // Knowledge fetcher
   knowledgeFetchEnabled: boolean;
   knowledgeFetchIntervalMs: number;
+  // Home automation — Philips Hue
+  hueBridgeIp?: string;
+  hueApiKey?: string;
+  // Home automation — Govee
+  goveeApiKey?: string;
+  // Home automation — IFTTT
+  iftttWebhookKey?: string;
+  iftttTriggers?: string;
 };
 
 function loadEnvFile() {
@@ -110,4 +118,12 @@ export const config: Config = {
   // Knowledge fetcher
   knowledgeFetchEnabled: process.env.KNOWLEDGE_FETCH_ENABLED === "1",
   knowledgeFetchIntervalMs: Number(process.env.KNOWLEDGE_FETCH_INTERVAL_MS ?? 60 * 60 * 1000),
+  // Home automation — Philips Hue
+  hueBridgeIp: process.env.HUE_BRIDGE_IP,
+  hueApiKey: process.env.HUE_API_KEY,
+  // Home automation — Govee
+  goveeApiKey: process.env.GOVEE_API_KEY,
+  // Home automation — IFTTT
+  iftttWebhookKey: process.env.IFTTT_WEBHOOK_KEY,
+  iftttTriggers: process.env.IFTTT_TRIGGERS,
 };
