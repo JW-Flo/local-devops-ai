@@ -430,15 +430,47 @@ export async function resolvePortConflict(port: number): Promise<boolean> {
             true,
           );
         } catch (err) {
-          await logIssue(
-            "port-conflict",
-            "critical",
-            `Failed to kill PID ${pid} holding port ${port}`,
-            `Manual intervention may be needed: taskkill /PID ${pid} /F`,
-            { pid, port, error: (err as Error).message },
-            false,
-          );
-          return false;
+          // Regular kill failed (likely EPERM — elevated process).
+          // Retry with UAC elevation via PowerShell Start-Process -Verb RunAs.
+          console.warn(`[self-healer] regular taskkill failed for PID ${pid}, attempting elevated kill...`);
+          try {
+            execSync(
+              `powershell -NoProfile -Command "Start-Process -FilePath '$env:SystemRoot\\System32\\taskkill.exe' -ArgumentList '/PID','${pid}','/T','/F' -Verb RunAs -Wait"`,
+              { timeout: 15000 },
+            );
+            // Verify the port is actually free now
+            await new Promise((r) => setTimeout(r, 1000));
+            try {
+              const recheck = execSync(`netstat -ano | findstr :${port} | findstr LISTEN`, {
+                encoding: "utf8",
+                timeout: 3000,
+              }).trim();
+              if (recheck && recheck.includes(String(pid))) {
+                throw new Error("PID still holding port after elevated kill");
+              }
+            } catch (recheckErr) {
+              // findstr returns exit 1 when no match = port is free
+              if ((recheckErr as any)?.status !== 1) throw recheckErr;
+            }
+            await logIssue(
+              "port-conflict",
+              "warning",
+              `Port ${port} was held by elevated PID ${pid} (${procName})`,
+              `Elevated kill succeeded for PID ${pid}`,
+              { pid, port, processName: procName, elevated: true },
+              true,
+            );
+          } catch (elevatedErr) {
+            await logIssue(
+              "port-conflict",
+              "critical",
+              `Failed to kill elevated PID ${pid} holding port ${port}`,
+              `Both regular and elevated kill failed. Requires manual reboot or admin taskkill.`,
+              { pid, port, error: (elevatedErr as Error).message, elevated: true },
+              false,
+            );
+            return false;
+          }
         }
       }
 
