@@ -50,6 +50,9 @@ type Config = {
   kalshiPrivateKeyPath?: string;
   kalshiBaseUrl: string;
   discordWebhookUrl?: string;
+  // Market Agent — dry run
+  marketDryRun: boolean;
+  marketSimBankroll: number;
 };
 
 function loadEnvFile() {
@@ -126,6 +129,9 @@ export const config: Config = {
   kalshiPassword: process.env.KALSHI_PASSWORD,
   kalshiApiKeyId: process.env.KALSHI_API_KEY_ID,
   kalshiPrivateKeyPath: process.env.KALSHI_PRIVATE_KEY_PATH,
-  kalshiBaseUrl: process.env.KALSHI_BASE_URL ?? "https://trading-api.kalshi.com",
+  kalshiBaseUrl: process.env.KALSHI_BASE_URL ?? "https://api.elections.kalshi.com",
   discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL,
+  // Market Agent — dry run (no real orders, simulated bankroll)
+  marketDryRun: process.env.MARKET_DRY_RUN !== "0",  // default ON
+  marketSimBankroll: Number(process.env.MARKET_SIM_BANKROLL ?? 1000),
 };
