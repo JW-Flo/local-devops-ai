@@ -77,7 +77,7 @@ export class KalshiWebSocket extends EventEmitter {
     const env = config.kalshiBaseUrl?.includes('demo') ?? true;
     const wsUrl = env
       ? 'wss://demo-api.kalshi.co/trade-api/ws/v2'
-      : 'wss://trading-api.kalshi.com/trade-api/ws/v2';
+      : 'wss://api.elections.kalshi.com/trade-api/ws/v2';
 
     console.log(`Connecting Kalshi WebSocket to ${wsUrl}`);
 

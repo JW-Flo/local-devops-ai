@@ -89,7 +89,7 @@ export class KalshiRest {
   constructor() {
     this.baseUrl = config.kalshiBaseUrl?.includes('demo')
       ? 'https://demo-api.kalshi.co/trade-api/v2'
-      : 'https://trading-api.kalshi.com/trade-api/v2';
+      : 'https://api.elections.kalshi.com/trade-api/v2';
   }
 
   private async request<T>(method: string, path: string, body?: object): Promise<T> {
