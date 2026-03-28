@@ -9,8 +9,9 @@
 import blessed from "blessed";
 import contrib from "blessed-contrib";
 
+const hostIdx = process.argv.indexOf("--host");
 const HOST = process.argv.find(a => a.startsWith("--host="))?.split("=")[1]
-  ?? process.argv[process.argv.indexOf("--host") + 1]
+  ?? (hostIdx !== -1 ? process.argv[hostIdx + 1] : undefined)
   ?? "http://127.0.0.1:4123";
 
 const POLL_MS = 3000;
@@ -380,19 +381,4 @@ screen.key(["r"], async () => {
 
 // ── Startup ──────────────────────────────────────────────────────────
 pushEvent("bot_started", `Dashboard connecting to ${HOST}`);
-pushEvent("bot_started", "Keys: [s]tart  [x]stop  [k]ill  [r]efresh  [q]uit");
-
-await pollStatus();
-await pollForecasts();
-await pollSignals();
-render();
-
-// Connect SSE for real-time events
-connectSSE();
-
-// Poll loops
-setInterval(async () => { await pollStatus(); await pollSignals(); render(); }, POLL_MS);
-setInterval(async () => { await pollForecasts(); render(); }, FORECAST_POLL_MS);
-setInterval(render, 1000);
-
-screen.render();
+pushEvent("bot_started", "Keys: [s]tart  [x]stop  [k]i
