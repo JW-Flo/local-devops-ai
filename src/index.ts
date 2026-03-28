@@ -47,10 +47,16 @@ import {
   initKPITracker, getKPIDashboard, getCycleHistory, resetKPIs,
 } from "./kpi-tracker.js";
 import { createMarketAgentRouter } from "./market-agent/index.js";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
+const __filename_local = fileURLToPath(import.meta.url);
+const __dirname_local = dirname(__filename_local);
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
+app.use(express.static(join(__dirname_local, "..", "ui", "dist")));
 app.use("/market", createMarketAgentRouter());
 
 const orchestrator = new TaskOrchestrator();
