@@ -46,10 +46,12 @@ import {
 import {
   initKPITracker, getKPIDashboard, getCycleHistory, resetKPIs,
 } from "./kpi-tracker.js";
+import { createMarketAgentRouter } from "./market-agent/index.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
+app.use("/market", createMarketAgentRouter());
 
 const orchestrator = new TaskOrchestrator();
 const scheduler = new Scheduler(orchestrator);

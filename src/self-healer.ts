@@ -409,9 +409,8 @@ export async function resolvePortConflict(port: number): Promise<boolean> {
       if (pids.size === 0) return true;
 
       for (const pid of pids) {
+        let procName = "unknown";
         try {
-          // Get process name for logging
-          let procName = "unknown";
           try {
             procName = execSync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, {
               encoding: "utf8",

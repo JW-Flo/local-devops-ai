@@ -13,7 +13,27 @@ export type EventType =
   | "coding-agent:start"
   | "coding-agent:generated"
   | "coding-agent:pr"
-  | "coding-agent:error";
+  | "coding-agent:error"
+  | "agent-loop:started"
+  | "agent-loop:stopped"
+  | "agent-loop:cycle-start"
+  | "agent-loop:cycle-complete"
+  | "agent-loop:cycle-error"
+  | "kpi:sla-violation"
+  | "kpi:cycle-recorded"
+  | "roadmap-updater:start"
+  | "roadmap-updater:complete"
+  | "self-healer:issue"
+  | "task-dispatcher:start"
+  | "task-dispatcher:task"
+  | "task-dispatcher:complete"
+  | "remediator:start"
+  | "remediator:attempt"
+  | "remediator:resolved"
+  | "remediator:exhausted"
+  | "market:signal"
+  | "market:trade"
+  | "market:kill";
 
 export type SSEPayload = {
   type: EventType;
