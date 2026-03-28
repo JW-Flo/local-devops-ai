@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Market Agent - Weather Arbitrage</title>
+<style>
+:root {
+  --bg: #0f1117; --surface: #1a1d27; --surface2: #242837;
+  --border: #2e3348; --text: #e4e6f0; --text-muted: #8b8fa3;
+  --accent: #6366f1; --accent-hover: #818cf8;
+  --green: #22c55e; --green-bg: rgba(34,197,94,.12);
+  --red: #ef4444; --red-bg: rgba(239,68,68,.12);
+  --yellow: #eab308; --yellow-bg: rgba(234,179,8,.12);
+  --radius: 10px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:var(--bg); color:var(--text); line-height:1.6; min-height:100vh; }
+a { color:var(--accent); text-decoration:none; }
+.container { max-width:1200px; margin:0 auto; padding:20px; }
+.header { display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; }
+.header h1 { font-size:1.5rem; font-weight:700; }
+.badge { padding:4px 10px; border-radius:12px; font-size:.75rem; font-weight:600; }
+.badge-green { background:var(--green-bg); color:var(--green); }
+.badge-red { background:var(--red-bg); color:var(--red); }
+.badge-yellow { background:var(--yellow-bg); color:var(--yellow); }
+.badge-muted { background:var(--surface2); color:var(--text-muted); }
+.grid { display:grid; gap:16px; margin-bottom:24px; }
+.grid-4 { grid-template-columns: repeat(4, 1fr); }
+.grid-2 { grid-template-columns: repeat(2, 1fr); }
+@media (max-width:768px) { .grid-4,.grid-2 { grid-template-columns:1fr; } }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:20px; }
+.card h3 { font-size:.8rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:8px; }
+.card .value { font-size:1.6rem; font-weight:700; }
+.card .sub { font-size:.8rem; color:var(--text-muted); margin-top:4px; }
+.btn { padding:8px 16px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface2);
+  color:var(--text); cursor:pointer; font-size:.85rem; font-weight:500; transition:all .15s; }
+.btn:hover { background:var(--accent); border-color:var(--accent); }
+.btn-danger { border-color:var(--red); color:var(--red); }
+.btn-danger:hover { background:var(--red); color:#fff; }
+.btn-green { border-color:var(--green); color:var(--green); }
+.btn-green:hover { background:var(--green); color:#fff; }
+table { width:100%; border-collapse:collapse; }
+th { text-align:left; font-size:.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;
+  padding:10px 12px; border-bottom:1px solid var(--border); }
+td { padding:10px 12px; border-bottom:1px solid var(--border); font-size:.85rem; }
+tr:hover { background:var(--surface2); }
+.mono { font-family:'JetBrains Mono','Fira Code',monospace; }
+.positive { color:var(--green); }
+.negative { color:var(--red); }
+.nav { display:flex; gap:12px; margin-bottom:24px; }
+.nav a { padding:6px 14px; border-radius:var(--radius); background:var(--surface); border:1px solid var(--border);
+  color:var(--text-muted); font-size:.85rem; }
+.nav a.active, .nav a:hover { background:var(--accent); color:#fff; border-color:var(--accent); }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="nav">
+    <a href="/">Dashboard</a>
+    <a href="/finance.html">Finance</a>
+    <a href="/market.html" class="active">Market Agent</a>
+  </div>
+  <div class="header">
+    <h1>Weather Arbitrage Agent</h1>
+    <div id="controls">
+      <button class="btn btn-green" onclick="startAgent()">Start</button>
+      <button class="btn" onclick="stopAgent()">Stop</button>
+      <button class="btn btn-danger" onclick="killSwitch()">KILL SWITCH</button>
+    </div>
+  </div>
+  <div id="status-bar" style="margin-bottom:16px;"></div>
+
+  <!-- KPI Cards -->
+  <div class="grid grid-4" id="kpi-cards">
+    <div class="card"><h3>Status</h3><div class="value" id="kpi-status">--</div><div class="sub" id="kpi-uptime"></div></div>
+    <div class="card"><h3>Balance</h3><div class="value mono" id="kpi-balance">--</div><div class="sub" id="kpi-pnl"></div></div>
+    <div class="card"><h3>Open Positions</h3><div class="value" id="kpi-positions">--</div><div class="sub" id="kpi-exposure"></div></div>
+    <div class="card"><h3>Signals Today</h3><div class="value" id="kpi-signals">--</div><div class="sub" id="kpi-trades"></div></div>
+  </div>
+
+  <!-- Forecasts + Signals -->
+  <div class="grid grid-2">
+    <div class="card">
+      <h3>City Forecasts</h3>
+      <table>
+        <thead><tr><th>City</th><th>High °F</th><th>Date</th><th>Series</th><th>Updated</th></tr></thead>
+        <tbody id="forecast-table"></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h3>Active Signals</h3>
+      <table>
+        <thead><tr><th>Ticker</th><th>Edge</th><th>Kelly %</th><th>Side</th><th>Status</th></tr></thead>
+        <tbody id="signals-table"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Recent Trades -->
+  <div class="card" style="margin-top:16px;">
+    <h3>Recent Trades</h3>
+    <table>
+      <thead><tr><th>Time</th><th>Ticker</th><th>Side</th><th>Price</th><th>Size</th><th>Edge</th><th>Haiku</th></tr></thead>
+      <tbody id="trades-table"></tbody>
+    </table>
+    <div id="no-trades" style="padding:20px;text-align:center;color:var(--text-muted);">No trades yet</div>
+  </div>
+
+  <!-- Event Log -->
+  <div class="card" style="margin-top:16px;">
+    <h3>Live Event Log</h3>
+    <div id="event-log" style="font-family:'JetBrains Mono','Fira Code',monospace;font-size:.8rem;max-height:200px;overflow-y:auto;padding:8px;background:var(--bg);border-radius:6px;">
+      <div style="color:var(--text-muted);">Connecting...</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+async function api(path, opts = {}) {
+  const res = await fetch(`${API}/market${path}`, {
+    headers: { 'Content-Type': 'application/json' }, ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  return res.json();
+}
+
+let refreshTimer = null;
+
+async function refresh() {
+  try {
+    const [statusData, forecastData, signalData] = await Promise.all([
+      api('/status'),
+      api('/forecasts').catch(() => ({ forecasts: [] })),
+      api('/signals').catch(() => ({ signals: [] })),
+    ]);
+    const d = statusData.data || statusData;
+    updateKPIs(d);
+    updateForecasts(forecastData.forecasts || []);
+    updateSignals(signalData.signals || []);
+    updateStatusBar(d);
+  } catch (e) {
+    document.getElementById('kpi-status').textContent = 'Error';
+    document.getElementById('kpi-status').className = 'value negative';
+  }
+}
+
+function updateStatusBar(d) {
+  const bar = document.getElementById('status-bar');
+  if (!d.running) { bar.innerHTML = ''; return; }
+  const mode = d.dryRun
+    ? '<span class="badge badge-yellow">DRY RUN</span>'
+    : '<span class="badge badge-red">LIVE TRADING</span>';
+  const ws = d.wsConnected
+    ? '<span class="badge badge-green">WS Connected</span>'
+    : '<span class="badge badge-red">WS Disconnected</span>';
+  const mkts = `<span class="badge badge-muted">${d.marketCount || 0} markets</span>`;
+  bar.innerHTML = [mode, ws, mkts].join(' ');
+}
+
+function updateKPIs(d) {
+  const statusEl = document.getElementById('kpi-status');
+  const running = d.running || d.status === 'running';
+  const safety = d.safety || {};
+  const killed = safety.killed || d.killSwitch;
+  statusEl.textContent = killed ? 'KILLED' : running ? 'Running' : 'Stopped';
+  statusEl.className = 'value ' + (killed ? 'negative' : running ? 'positive' : '');
+  document.getElementById('kpi-uptime').textContent = d.dryRun ? 'Dry Run' : '';
+
+  const balance = d.bankroll ?? d.balance;
+  document.getElementById('kpi-balance').textContent = balance != null ? '$' + Number(balance).toFixed(2) : '--';
+  const pnl = safety.dailyPnL || d.dailyPnL || 0;
+  const pnlEl = document.getElementById('kpi-pnl');
+  pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + Number(pnl).toFixed(2) + ' today';
+  pnlEl.className = 'sub ' + (pnl >= 0 ? 'positive' : 'negative');
+
+  document.getElementById('kpi-positions').textContent = safety.positionCount ?? d.openPositions ?? '--';
+  const exp = safety.totalExposure ?? d.exposure;
+  document.getElementById('kpi-exposure').textContent = exp != null ? '$' + Number(exp).toFixed(2) + ' exposure' : '';
+
+  document.getElementById('kpi-signals').textContent = d.signals ?? d.signalCount ?? '--';
+  document.getElementById('kpi-trades').textContent = (d.tradeCount ?? 0) + ' trades executed';
+}
+
+function updateForecasts(forecasts) {
+  const tbody = document.getElementById('forecast-table');
+  if (!forecasts.length) { tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No forecasts</td></tr>'; return; }
+  tbody.innerHTML = forecasts.map(f => {
+    const temp = f.highF ?? '--';
+    const tempIcon = temp >= 80 ? '🔴' : temp >= 60 ? '🟡' : '🔵';
+    const date = f.targetDate || '--';
+    return `<tr>
+      <td><strong>${f.city}</strong></td>
+      <td class="mono">${tempIcon} ${temp}°</td>
+      <td>${date}</td>
+      <td><span class="badge badge-muted">${f.seriesTicker || '--'}</span></td>
+      <td style="color:var(--text-muted)">${f.forecastTime ? new Date(f.forecastTime).toLocaleTimeString() : '--'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function updateSignals(signals) {
+  const tbody = document.getElementById('signals-table');
+  if (!signals.length) { tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No active signals</td></tr>'; return; }
+  tbody.innerHTML = signals.map(s => `<tr>
+    <td class="mono">${s.ticker || s.market_ticker || '--'}</td>
+    <td class="mono ${(s.edge||0) > 0 ? 'positive' : 'negative'}">${((s.edge||0)*100).toFixed(1)}¢</td>
+    <td class="mono">${((s.kellyPct||s.kelly||0)*100).toFixed(1)}%</td>
+    <td><span class="badge ${s.side === 'yes' ? 'badge-green' : 'badge-red'}">${s.side || '--'}</span></td>
+    <td><span class="badge ${s.status === 'executed' ? 'badge-green' : s.status === 'rejected' ? 'badge-red' : 'badge-yellow'}">${s.status || 'pending'}</span></td>
+  </tr>`).join('');
+}
+
+function updateTrades(trades) {
+  const tbody = document.getElementById('trades-table');
+  const noTrades = document.getElementById('no-trades');
+  if (!trades.length) { tbody.innerHTML = ''; noTrades.style.display = 'block'; return; }
+  noTrades.style.display = 'none';
+  tbody.innerHTML = trades.map(t => `<tr>
+    <td style="color:var(--text-muted)">${new Date(t.timestamp).toLocaleTimeString()}</td>
+    <td class="mono">${t.ticker}</td>
+    <td><span class="badge ${t.side === 'yes' ? 'badge-green' : 'badge-red'}">${t.side}</span></td>
+    <td class="mono">$${Number(t.price).toFixed(2)}</td>
+    <td class="mono">${t.size}</td>
+    <td class="mono positive">${((t.edge||0)*100).toFixed(1)}¢</td>
+    <td><span class="badge ${t.haikuApproved ? 'badge-green' : 'badge-red'}">${t.haikuApproved ? '✓' : '✗'}</span></td>
+  </tr>`).join('');
+}
+
+function logEvent(type, msg) {
+  const log = document.getElementById('event-log');
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+  const colors = {
+    signal: 'var(--accent)', trade: 'var(--green)', kill: 'var(--red)',
+    start: 'var(--green)', stop: 'var(--yellow)', error: 'var(--red)',
+    info: 'var(--text-muted)', forecast: '#eab308',
+  };
+  const color = colors[type] || 'var(--text-muted)';
+  const div = document.createElement('div');
+  div.innerHTML = `<span style="color:var(--text-muted)">${ts}</span> <span style="color:${color}">[${type}]</span> ${msg}`;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  // Keep last 100 entries
+  while (log.children.length > 100) log.removeChild(log.firstChild);
+}
+
+async function startAgent() {
+  logEvent('start', 'Starting agent...');
+  try {
+    await api('/start', { method: 'POST' });
+    logEvent('start', 'Agent started');
+    refresh();
+    if (!refreshTimer) refreshTimer = setInterval(refresh, 5000);
+  } catch (e) { logEvent('error', 'Start failed: ' + e.message); }
+}
+
+async function stopAgent() {
+  logEvent('stop', 'Stopping agent...');
+  try {
+    await api('/stop', { method: 'POST' });
+    logEvent('stop', 'Agent stopped');
+    refresh();
+    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  } catch (e) { logEvent('error', 'Stop failed: ' + e.message); }
+}
+
+async function killSwitch() {
+  if (!confirm('KILL SWITCH: Cancel all orders and halt trading?')) return;
+  logEvent('kill', 'KILL SWITCH activated');
+  try {
+    await api('/kill', { method: 'POST' });
+    logEvent('kill', 'Kill confirmed — all orders cancelled');
+    refresh();
+    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  } catch (e) { logEvent('error', 'Kill failed: ' + e.message); }
+}
+
+// SSE for real-time updates
+function connectSSE() {
+  const es = new EventSource(`${API}/events`);
+  es.onopen = () => logEvent('info', 'SSE stream connected');
+  es.onmessage = (e) => {
+    try {
+      const evt = JSON.parse(e.data);
+      if (evt.type === 'market:signal') {
+        logEvent('signal', `Signal: ${evt.payload?.ticker || 'unknown'}`);
+        refresh();
+      } else if (evt.type === 'market:trade') {
+        logEvent('trade', `Trade: ${evt.payload?.ticker || 'unknown'}`);
+        refresh();
+      } else if (evt.type === 'market:kill') {
+        logEvent('kill', 'Kill switch triggered via SSE');
+        refresh();
+      }
+    } catch {}
+  };
+  es.onerror = () => {
+    logEvent('error', 'SSE disconnected — reconnecting in 5s');
+    es.close();
+    setTimeout(connectSSE, 5000);
+  };
+}
+
+// Init
+logEvent('info', 'Dashboard loaded');
+refresh();
+refreshTimer = setInterval(refresh, 5000);
+connectSSE();
+</script>
+</body>
+</html>
