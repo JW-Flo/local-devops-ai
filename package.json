@@ -7,11 +7,14 @@
     "dev": "tsx watch src/index.ts",
     "start": "node --env-file=.env dist/index.js",
     "build": "tsc -p tsconfig.json",
-    "ingest": "tsx scripts/ingest.ts"
+    "ingest": "tsx scripts/ingest.ts",
+    "dashboard": "node cli/dashboard.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1015.0",
     "@iarna/toml": "^2.2.5",
+    "blessed": "^0.1.81",
+    "blessed-contrib": "^4.11.0",
     "chokidar": "^3.6.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
