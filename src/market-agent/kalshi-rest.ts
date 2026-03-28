@@ -1,9 +1,42 @@
+import crypto from 'crypto';
+import { readFileSync } from 'fs';
 import { config } from '../config.js';
 
-interface KalshiLoginResponse {
-  token: string;
-  member_id: string;
+// ── RSA-PSS per-request signing for Kalshi API v2 ──
+
+const KALSHI_KEY_ID = process.env.KALSHI_API_KEY_ID ?? '';
+const KALSHI_PRIVATE_KEY_PATH = process.env.KALSHI_PRIVATE_KEY_PATH ?? '';
+
+let privateKeyPem: string | null = null;
+
+function getPrivateKey(): string {
+  if (!privateKeyPem) {
+    if (!KALSHI_PRIVATE_KEY_PATH) throw new Error('KALSHI_PRIVATE_KEY_PATH not set');
+    privateKeyPem = readFileSync(KALSHI_PRIVATE_KEY_PATH, 'utf-8');
+  }
+  return privateKeyPem;
 }
+
+function signRequest(method: string, path: string): Record<string, string> {
+  const ts = Date.now();
+  const cleanPath = path.split('?')[0];
+  const message = `${ts}${method.toUpperCase()}${cleanPath}`;
+
+  const signature = crypto.sign('sha256', Buffer.from(message), {
+    key: getPrivateKey(),
+    padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+    saltLength: 32,
+  });
+
+  return {
+    'KALSHI-ACCESS-KEY': KALSHI_KEY_ID,
+    'KALSHI-ACCESS-TIMESTAMP': ts.toString(),
+    'KALSHI-ACCESS-SIGNATURE': signature.toString('base64'),
+    'Content-Type': 'application/json',
+  };
+}
+
+// ── Types ──
 
 interface KalshiMarket {
   ticker: string;
@@ -48,30 +81,21 @@ interface KalshiPosition {
   total_traded: number;
 }
 
+// ── Client ──
+
 export class KalshiRest {
   private baseUrl: string;
-  private token: string | null = null;
-  private memberId: string | null = null;
-  private tokenExpiry: number = 0;
 
   constructor() {
-    const env = (config.kalshiBaseUrl?.includes('demo') ?? true) ? 'demo' : 'prod';
-    this.baseUrl =
-      env === 'prod'
-        ? 'https://api.elections.kalshi.com/trade-api/v2'
-        : 'https://demo-api.kalshi.co/trade-api/v2';
+    this.baseUrl = config.kalshiBaseUrl?.includes('demo')
+      ? 'https://demo-api.kalshi.co/trade-api/v2'
+      : 'https://trading-api.kalshi.com/trade-api/v2';
   }
 
   private async request<T>(method: string, path: string, body?: object): Promise<T> {
-    await this.ensureAuth();
-
+    const fullPath = `/trade-api/v2${path}`;
     const url = `${this.baseUrl}${path}`;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
-    }
+    const headers = signRequest(method, fullPath);
 
     const res = await fetch(url, {
       method,
@@ -80,19 +104,9 @@ export class KalshiRest {
     });
 
     if (res.status === 401) {
-      this.token = null;
-      await this.ensureAuth();
-      headers['Authorization'] = `Bearer ${this.token}`;
-      const retry = await fetch(url, {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      if (!retry.ok) {
-        const text = await retry.text();
-        throw new Error(`Kalshi API ${method} ${path} failed: ${retry.status} ${text}`);
-      }
-      return retry.json() as T;
+      // RSA signing doesn't need re-auth — likely clock skew or bad key
+      const text = await res.text();
+      throw new Error(`Kalshi 401 (check key/clock): ${method} ${path} — ${text}`);
     }
 
     if (!res.ok) {
@@ -103,37 +117,13 @@ export class KalshiRest {
     return res.json() as T;
   }
 
-  private async ensureAuth(): Promise<void> {
-    if (this.token && Date.now() < this.tokenExpiry) return;
-
-    console.log('Authenticating with Kalshi API');
-    const res = await fetch(`${this.baseUrl}/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: config.kalshiEmail,
-        password: config.kalshiPassword,
-      }),
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Kalshi login failed: ${res.status} ${text}`);
-    }
-
-    const data = (await res.json()) as KalshiLoginResponse;
-    this.token = data.token;
-    this.memberId = data.member_id;
-    this.tokenExpiry = Date.now() + 55 * 60 * 1000;
-    console.log(`Kalshi authenticated: ${this.memberId}`);
-  }
-
+  // Kept for backward compat with KalshiFeed / KalshiWs
   getToken(): string | null {
-    return this.token;
+    return KALSHI_KEY_ID || null;
   }
 
   getMemberId(): string | null {
-    return this.memberId;
+    return KALSHI_KEY_ID || null;
   }
 
   async getWeatherMarkets(): Promise<KalshiMarket[]> {

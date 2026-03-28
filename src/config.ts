@@ -46,6 +46,8 @@ type Config = {
   // Market Agent
   kalshiEmail?: string;
   kalshiPassword?: string;
+  kalshiApiKeyId?: string;
+  kalshiPrivateKeyPath?: string;
   kalshiBaseUrl: string;
   discordWebhookUrl?: string;
 };
@@ -122,6 +124,8 @@ export const config: Config = {
   // Market Agent
   kalshiEmail: process.env.KALSHI_EMAIL,
   kalshiPassword: process.env.KALSHI_PASSWORD,
+  kalshiApiKeyId: process.env.KALSHI_API_KEY_ID,
+  kalshiPrivateKeyPath: process.env.KALSHI_PRIVATE_KEY_PATH,
   kalshiBaseUrl: process.env.KALSHI_BASE_URL ?? "https://trading-api.kalshi.com",
   discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL,
 };
