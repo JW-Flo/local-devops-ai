@@ -41,6 +41,13 @@ type Config = {
   // Knowledge fetcher
   knowledgeFetchEnabled: boolean;
   knowledgeFetchIntervalMs: number;
+  // Database
+  dbRoot: string;
+  // Market Agent
+  kalshiEmail?: string;
+  kalshiPassword?: string;
+  kalshiBaseUrl: string;
+  discordWebhookUrl?: string;
 };
 
 function loadEnvFile() {
@@ -110,4 +117,11 @@ export const config: Config = {
   // Knowledge fetcher
   knowledgeFetchEnabled: process.env.KNOWLEDGE_FETCH_ENABLED === "1",
   knowledgeFetchIntervalMs: Number(process.env.KNOWLEDGE_FETCH_INTERVAL_MS ?? 60 * 60 * 1000),
+  // Database
+  dbRoot: process.env.DB_ROOT ?? "D:/ai-knowledge/databases",
+  // Market Agent
+  kalshiEmail: process.env.KALSHI_EMAIL,
+  kalshiPassword: process.env.KALSHI_PASSWORD,
+  kalshiBaseUrl: process.env.KALSHI_BASE_URL ?? "https://trading-api.kalshi.com",
+  discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL,
 };
