@@ -73,15 +73,9 @@ export class MarketAgent {
 
     try {
       this.bankroll = await this.kalshiRest.getBalance();
-      console.log(`Kalshi balance: $${this.bankroll.toFixed(2)}`);
+      console.log(`Initial balance: $${this.bankroll.toFixed(2)}`);
     } catch (err) {
       console.error('Failed to fetch balance:', err);
-    }
-    if (config.marketDryRun) {
-      // Use sim bankroll as the reference for sizing, but still called getBalance()
-      const realBalance = this.bankroll;
-      this.bankroll = config.marketSimBankroll;
-      console.log(`[DRY RUN] Using sim bankroll: $${this.bankroll.toFixed(2)} (real: $${realBalance.toFixed(2)})`);
     }
 
     await this.feed.start();
@@ -168,7 +162,6 @@ export class MarketAgent {
   getStatus() {
     return {
       running: this.running,
-      dryRun: config.marketDryRun,
       bankroll: this.bankroll,
       safety: this.safety.getStatus(),
       marketCount: this.feed.getMarketTickers().length,

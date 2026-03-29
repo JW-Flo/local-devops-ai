@@ -43,21 +43,27 @@ import {
   getStats as getRateLimiterStats,
   resetRateLimiter,
 } from "./rate-limiter.js";
+import { homeRouter } from "./home-automation/index.js";
+import { startPeriodicScan } from "./home-automation/network-scanner.js";
+import { financeRouter } from "./finance-tracker/index.js";
+import { createMarketAgentRouter } from "./market-agent/index.js";
+import { createOpenClawRouter } from "./openclaw/index.js";
+import { syncAllItems as syncPlaidTransactions } from "./finance-tracker/plaid.js";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import {
   initKPITracker, getKPIDashboard, getCycleHistory, resetKPIs,
 } from "./kpi-tracker.js";
-import { createMarketAgentRouter } from "./market-agent/index.js";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
-
-const __filename_local = fileURLToPath(import.meta.url);
-const __dirname_local = dirname(__filename_local);
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
-app.use(express.static(join(__dirname_local, "..", "ui", "dist")));
-app.use("/market", createMarketAgentRouter());
+
+// Serve static UI files (finance.html, etc.) from ui/dist
+const __filename_local = fileURLToPath(import.meta.url);
+const __dirname_local = dirname(__filename_local);
+const uiDistPath = join(__dirname_local, "..", "..", "ui", "dist");
+app.use(express.static(uiDistPath));
 
 const orchestrator = new TaskOrchestrator();
 const scheduler = new Scheduler(orchestrator);
@@ -563,6 +569,19 @@ app.delete("/kpi", async (_req, res) => {
   res.json({ status: "success", data: { cleared: true } });
 });
 
+// ── Finance Tracker ──
+
+app.use("/finance", financeRouter);
+
+// ── Home Automation ──
+
+app.use("/home", homeRouter);
+
+// ── Market Agent (Weather Arbitrage) ──
+
+app.use("/market", createMarketAgentRouter());
+app.use("/openclaw", createOpenClawRouter());
+
 // ── Self-Healer ──
 
 app.get("/healer/stats", (_req, res) => {
@@ -591,6 +610,24 @@ await runStartupChecks(config.port);
 await initKPITracker();
 
 startKnowledgeWatcher();
+
+// Auto-start network scanner (5-min interval, initial quick scan)
+startPeriodicScan(300_000);
+
+// Auto-sync Plaid transactions every 6 hours
+const PLAID_SYNC_INTERVAL = 6 * 60 * 60 * 1000; // 6h
+setInterval(async () => {
+  try {
+    const result = await syncPlaidTransactions();
+    if (result.added > 0 || result.modified > 0 || result.removed > 0) {
+      console.log(`[plaid-auto-sync] +${result.added} ~${result.modified} -${result.removed}`);
+      broadcast("finance:synced", result);
+    }
+  } catch (err) {
+    console.warn(`[plaid-auto-sync] failed: ${(err as Error).message}`);
+  }
+}, PLAID_SYNC_INTERVAL);
+console.log(`[startup] Plaid auto-sync every ${PLAID_SYNC_INTERVAL / 3600000}h`);
 
 // Auto-start knowledge fetch timer
 if (config.knowledgeFetchEnabled) {

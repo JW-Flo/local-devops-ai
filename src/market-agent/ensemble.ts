@@ -51,15 +51,6 @@ Respond with this exact JSON format:
     return result;
   } catch (err) {
     console.error(`Haiku validation failed for ${signal.ticker}:`, err);
-    // In dry-run mode, approve anyway so the rest of the pipeline gets exercised
-    if (config.marketDryRun) {
-      console.warn(`[DRY RUN] Bypassing Haiku fail-closed for ${signal.ticker}`);
-      return {
-        approved: true,
-        confidence: 50,
-        reasoning: `DRY RUN bypass — Bedrock unavailable: ${(err as Error).message}`,
-      };
-    }
     return {
       approved: false,
       confidence: 0,
