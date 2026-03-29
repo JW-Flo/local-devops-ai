@@ -409,6 +409,7 @@ export async function resolvePortConflict(port: number): Promise<boolean> {
       if (pids.size === 0) return true;
 
       for (const pid of pids) {
+        // Get process name for logging (declared outside try so catch can access it)
         let procName = "unknown";
         try {
           try {

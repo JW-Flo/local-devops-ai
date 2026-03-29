@@ -5,13 +5,11 @@ import { MispricingSignal, TradeValidation, TradeExecutedPayload } from './types
 import { validateWithHaiku } from './ensemble.js';
 import { notify } from './notifications.js';
 import { withDb } from '../storage/sqlite.js';
-import { config } from '../config.js';
 
 export class OrderExecutor {
   private rest: KalshiRest;
   private safety: SafetyGuard;
   private pendingOrders: Set<string> = new Set();
-  private simTradeCount = 0;
 
   constructor(rest: KalshiRest, safety: SafetyGuard) {
     this.rest = rest;
@@ -71,42 +69,6 @@ export class OrderExecutor {
 
     this.pendingOrders.add(signal.ticker);
     try {
-      const rationale =
-        `NOAA ${signal.noaaForecastF}°F, prob ${(signal.noaaConfidence * 100).toFixed(1)}%, ` +
-        `edge $${signal.edge.toFixed(3)}, Kelly ${signal.kellyFraction.toFixed(3)}`;
-
-      // ── DRY RUN: log everything, skip Kalshi API ──
-      if (config.marketDryRun) {
-        this.simTradeCount++;
-        const simOrderId = `SIM-${this.simTradeCount.toString().padStart(4, '0')}`;
-        this.safety.recordTrade(signal.ticker, signal.recommendedContracts, signal.marketPrice);
-
-        const payload: TradeExecutedPayload = {
-          order_id: simOrderId,
-          ticker: signal.ticker,
-          side: 'buy',
-          quantity: signal.recommendedContracts,
-          price: signal.marketPrice,
-          total_cost: signal.recommendedContracts * signal.marketPrice,
-          rationale,
-        };
-
-        await withDb(async (db: Database) => {
-          db.run(
-            `INSERT INTO events (event_type, timestamp_ms, market_ticker, payload) VALUES (?, ?, ?, ?)`,
-            ['trade_simulated', Date.now(), signal.ticker, JSON.stringify(payload)]
-          );
-        }, { db: 'market-agent', persist: true });
-
-        console.log(
-          `[DRY RUN] ${simOrderId} | ${signal.ticker} | ` +
-          `${signal.recommendedContracts}@$${signal.marketPrice.toFixed(2)} | ${rationale}`
-        );
-
-        return true;
-      }
-
-      // ── LIVE: place real order via Kalshi API ──
       const order = await this.rest.createOrder({
         ticker: signal.ticker,
         side: 'yes',
@@ -125,7 +87,8 @@ export class OrderExecutor {
         quantity: signal.recommendedContracts,
         price: signal.marketPrice,
         total_cost: signal.recommendedContracts * signal.marketPrice,
-        rationale,
+        rationale: `NOAA ${signal.noaaForecastF}°F, prob ${(signal.noaaConfidence * 100).toFixed(1)}%, ` +
+          `edge $${signal.edge.toFixed(3)}, Kelly ${signal.kellyFraction.toFixed(3)}`,
       };
 
       await withDb(async (db: Database) => {
@@ -150,6 +113,7 @@ export class OrderExecutor {
       return true;
     } catch (err) {
       console.error(`Order placement failed for ${signal.ticker}:`, err);
+      console.error(`Order failed for ${signal.ticker}:`, err);
       await notify(`Order FAILED: ${signal.ticker} — execution error`, 'error');
       return false;
     } finally {

@@ -13,6 +13,7 @@ type Config = {
   knowledgeRoot: string;
   workspaceRoot: string;
   cacheDir: string;
+  dbRoot: string;
   defaultApprover: string;
   maxTokens: number;
   temperature: number;
@@ -41,18 +42,20 @@ type Config = {
   // Knowledge fetcher
   knowledgeFetchEnabled: boolean;
   knowledgeFetchIntervalMs: number;
-  // Database
-  dbRoot: string;
-  // Market Agent
+  // Home automation — Philips Hue
+  hueBridgeIp?: string;
+  hueApiKey?: string;
+  // Home automation — Govee
+  goveeApiKey?: string;
+  // Home automation — IFTTT
+  iftttWebhookKey?: string;
+  iftttTriggers?: string;
+  // Market Agent — Kalshi
+  kalshiApiKey?: string;
   kalshiEmail?: string;
   kalshiPassword?: string;
-  kalshiApiKeyId?: string;
-  kalshiPrivateKeyPath?: string;
   kalshiBaseUrl: string;
   discordWebhookUrl?: string;
-  // Market Agent — dry run
-  marketDryRun: boolean;
-  marketSimBankroll: number;
 };
 
 function loadEnvFile() {
@@ -75,8 +78,6 @@ loadEnvFile();
 function resolveLLMProvider(): "bedrock" | "openrouter" | "ollama" {
   const explicit = process.env.LLM_PROVIDER;
   if (explicit === "bedrock" || explicit === "openrouter" || explicit === "ollama") return explicit;
-
-  // Auto-detect: prefer bedrock if configured, then openrouter, then ollama
   if (process.env.USE_BEDROCK !== "0" && process.env.AWS_ACCESS_KEY_ID) return "bedrock";
   if (process.env.OPENROUTER_API_KEY) return "openrouter";
   return "ollama";
@@ -94,6 +95,7 @@ export const config: Config = {
   knowledgeRoot: process.env.KNOWLEDGE_ROOT ?? "D:/ai-knowledge",
   workspaceRoot: process.env.WORKSPACE_ROOT ?? "D:/repos",
   cacheDir: process.env.CACHE_DIR ?? "D:/ai-cache",
+  dbRoot: process.env.DB_ROOT ?? "D:/ai-knowledge/databases",
   defaultApprover: process.env.DEFAULT_APPROVER ?? "local-admin",
   maxTokens: Number(process.env.MAX_TOKENS ?? 2048),
   temperature: Number(process.env.TEMPERATURE ?? 0.15),
@@ -122,16 +124,18 @@ export const config: Config = {
   // Knowledge fetcher
   knowledgeFetchEnabled: process.env.KNOWLEDGE_FETCH_ENABLED === "1",
   knowledgeFetchIntervalMs: Number(process.env.KNOWLEDGE_FETCH_INTERVAL_MS ?? 60 * 60 * 1000),
-  // Database
-  dbRoot: process.env.DB_ROOT ?? "D:/ai-knowledge/databases",
-  // Market Agent
+  // Home automation — Philips Hue
+  hueBridgeIp: process.env.HUE_BRIDGE_IP,
+  hueApiKey: process.env.HUE_API_KEY,
+  // Home automation — Govee
+  goveeApiKey: process.env.GOVEE_API_KEY,
+  // Home automation — IFTTT
+  iftttWebhookKey: process.env.IFTTT_WEBHOOK_KEY,
+  iftttTriggers: process.env.IFTTT_TRIGGERS,
+  // Market Agent — Kalshi
+  kalshiApiKey: process.env.KALSHI_API_KEY,
   kalshiEmail: process.env.KALSHI_EMAIL,
   kalshiPassword: process.env.KALSHI_PASSWORD,
-  kalshiApiKeyId: process.env.KALSHI_API_KEY_ID,
-  kalshiPrivateKeyPath: process.env.KALSHI_PRIVATE_KEY_PATH,
-  kalshiBaseUrl: process.env.KALSHI_BASE_URL ?? "https://api.elections.kalshi.com",
+  kalshiBaseUrl: process.env.KALSHI_BASE_URL ?? "https://api.elections.kalshi.com/trade-api/v2",
   discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL,
-  // Market Agent — dry run (no real orders, simulated bankroll)
-  marketDryRun: process.env.MARKET_DRY_RUN !== "0",  // default ON
-  marketSimBankroll: Number(process.env.MARKET_SIM_BANKROLL ?? 1000),
 };

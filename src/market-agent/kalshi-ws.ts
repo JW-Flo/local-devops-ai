@@ -1,30 +1,6 @@
 import WebSocket from 'ws';
-import crypto from 'crypto';
-import { readFileSync } from 'fs';
 import { EventEmitter } from 'events';
 import { config } from '../config.js';
-
-const KALSHI_KEY_ID = process.env.KALSHI_API_KEY_ID ?? '';
-const KALSHI_PRIVATE_KEY_PATH = process.env.KALSHI_PRIVATE_KEY_PATH ?? '';
-
-function signWsConnect(): Record<string, string> {
-  if (!KALSHI_PRIVATE_KEY_PATH || !KALSHI_KEY_ID) return {};
-  const pem = readFileSync(KALSHI_PRIVATE_KEY_PATH, 'utf-8');
-  const ts = Date.now();
-  const method = 'GET';
-  const path = '/trade-api/ws/v2';
-  const message = `${ts}${method}${path}`;
-  const signature = crypto.sign('sha256', Buffer.from(message), {
-    key: pem,
-    padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
-    saltLength: 32,
-  });
-  return {
-    'KALSHI-ACCESS-KEY': KALSHI_KEY_ID,
-    'KALSHI-ACCESS-TIMESTAMP': ts.toString(),
-    'KALSHI-ACCESS-SIGNATURE': signature.toString('base64'),
-  };
-}
 
 interface WSMessage {
   id?: number;
@@ -68,8 +44,9 @@ export class KalshiWebSocket extends EventEmitter {
   }
 
   async connect(): Promise<void> {
-    if (!KALSHI_KEY_ID) {
-      console.warn('No KALSHI_API_KEY_ID configured for WebSocket');
+    const token = this.getToken();
+    if (!token) {
+      console.warn('No auth token available for WebSocket');
       this.scheduleReconnect();
       return;
     }
@@ -83,7 +60,9 @@ export class KalshiWebSocket extends EventEmitter {
 
     return new Promise((resolve) => {
       this.ws = new WebSocket(wsUrl, {
-        headers: signWsConnect(),
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       });
 
       this.ws.on('open', () => {
