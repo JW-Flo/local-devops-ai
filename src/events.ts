@@ -66,7 +66,7 @@ export function broadcast(type: EventType, data: unknown): void {
     data,
     timestamp: new Date().toISOString(),
   };
-  const msg = `event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`;
+  const msg = `data: ${JSON.stringify(payload)}\n\n`;
   for (const client of clients) {
     try { client.write(msg); } catch { clients.delete(client); }
   }
