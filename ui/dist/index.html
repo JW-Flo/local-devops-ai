@@ -97,6 +97,7 @@ tr:hover { background:var(--surface2); }
     <button class="tab-btn" onclick="switchTab('finance', this)">Finance</button>
     <button class="tab-btn" onclick="switchTab('knowledge', this)">Knowledge</button>
     <button class="tab-btn" onclick="switchTab('health', this)">Health &amp; KPIs</button>
+    <button class="tab-btn" onclick="switchTab('home', this)">Home</button>
   </div>
 
   <!-- TAB 1: OVERVIEW -->
@@ -346,6 +347,62 @@ tr:hover { background:var(--surface2); }
       <table>
         <thead><tr><th>Time</th><th>Duration</th><th>Tasks</th><th>Result</th></tr></thead>
         <tbody id="history-table"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- TAB 7: HOME AUTOMATION -->
+  <div id="home" class="tab-content">
+    <div class="grid grid-2">
+      <div class="card">
+        <h3>Adapter Status</h3>
+        <div id="home-adapters" style="padding:12px 0;">
+          <div style="color:var(--text-muted)">Loading...</div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Network Scanner</h3>
+        <div style="padding:12px 0;">
+          <div><strong>Total Hosts:</strong> <span id="net-total" class="value" style="font-size:1.2rem;">--</span></div>
+          <div><strong>Online:</strong> <span id="net-online" class="positive value" style="font-size:1.2rem;">--</span></div>
+          <div style="margin-top:12px; display:flex; gap:8px;">
+            <button class="btn" onclick="doNetworkScan(this)">Scan Now</button>
+            <button class="btn btn-green" id="btn-monitor-start" onclick="doMonitor('start', this)">Start Monitor</button>
+            <button class="btn btn-danger" id="btn-monitor-stop" onclick="doMonitor('stop', this)">Stop Monitor</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-4" id="home-device-summary"></div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Devices</h3>
+      <div style="margin-bottom:12px; display:flex; gap:8px;">
+        <button class="btn tab-filter active" onclick="filterDevices('all', this)">All</button>
+        <button class="btn tab-filter" onclick="filterDevices('hue', this)">Hue</button>
+        <button class="btn tab-filter" onclick="filterDevices('govee', this)">Govee</button>
+        <button class="btn tab-filter" onclick="filterDevices('ifttt', this)">IFTTT</button>
+      </div>
+      <table>
+        <thead><tr><th>Name</th><th>Type</th><th>Adapter</th><th>Room</th><th>State</th><th>Brightness</th><th>Actions</th></tr></thead>
+        <tbody id="home-devices-table"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Scenes</h3>
+      <table>
+        <thead><tr><th>Name</th><th>Adapter</th><th>Room</th><th>Devices</th><th>Actions</th></tr></thead>
+        <tbody id="home-scenes-table"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Network Devices</h3>
+      <table>
+        <thead><tr><th>IP</th><th>Hostname</th><th>Vendor</th><th>Type</th><th>MAC</th><th>Ports</th><th>Status</th></tr></thead>
+        <tbody id="home-network-table"></tbody>
       </table>
     </div>
   </div>
@@ -834,6 +891,152 @@ async function refreshHealth() {
   `).join('') : emptyRow(4, 'No history');
 }
 
+
+/* ── Home Automation ── */
+
+let homeDeviceFilter = 'all';
+let cachedHomeDevices = [];
+
+function filterDevices(filter, btn) {
+  homeDeviceFilter = filter;
+  document.querySelectorAll('.tab-filter').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  renderHomeDevices();
+}
+
+function renderHomeDevices() {
+  const filtered = homeDeviceFilter === 'all'
+    ? cachedHomeDevices
+    : cachedHomeDevices.filter(d => d.adapter === homeDeviceFilter);
+
+  document.getElementById('home-devices-table').innerHTML = filtered.length ? filtered.map(d => {
+    const isOn = d.state?.on;
+    const brightness = d.state?.brightness != null ? d.state.brightness + '%' : '--';
+    const reachable = d.state?.reachable !== false;
+    return `<tr>
+      <td><strong>${d.name || d.id}</strong></td>
+      <td>${d.type || 'unknown'}</td>
+      <td><span class="badge badge-muted">${d.adapter}</span></td>
+      <td>${d.room || '--'}</td>
+      <td><span class="badge ${isOn ? 'badge-green' : 'badge-muted'}">${isOn ? 'On' : 'Off'}</span>
+        ${!reachable ? '<span class="badge badge-red" style="margin-left:4px">Unreachable</span>' : ''}</td>
+      <td class="mono">${brightness}</td>
+      <td>
+        <button class="btn" style="padding:4px 10px; font-size:.75rem;" onclick="toggleDevice('${d.id}', ${!isOn})">${isOn ? 'Turn Off' : 'Turn On'}</button>
+      </td>
+    </tr>`;
+  }).join('') : emptyRow(7, 'No devices');
+}
+
+async function toggleDevice(id, turnOn) {
+  const result = await apiCall(`/home/devices/${id}`);
+  if (!result) return;
+  const res = await fetch(`${API}/home/devices/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ on: turnOn }),
+  }).then(r => r.json()).catch(() => null);
+  if (res && res.status === 'success') {
+    showToast(`${id} turned ${turnOn ? 'on' : 'off'}`, 'success');
+    refreshHome();
+  } else {
+    showToast(`Failed to toggle ${id}`, 'error');
+  }
+}
+
+async function activateScene(id) {
+  const res = await apiPost(`/home/scenes/${id}`);
+  if (res) {
+    showToast(`Scene ${id} activated`, 'success');
+    refreshHome();
+  }
+}
+
+async function doNetworkScan(btn) {
+  if (btn) btn.disabled = true;
+  const res = await apiPost('/home/network/scan');
+  if (btn) btn.disabled = false;
+  if (res) {
+    const data = unwrap(res);
+    showToast(`Scan complete: ${data?.hosts?.length || 0} hosts found in ${fmtMs(data?.duration)}`, 'success');
+    refreshHome();
+  }
+}
+
+async function doMonitor(action, btn) {
+  if (btn) btn.disabled = true;
+  const res = await apiPost(`/home/network/monitor/${action}`);
+  if (btn) btn.disabled = false;
+  if (res) showToast(`Monitor ${action}ed`, 'success');
+}
+
+async function refreshHome() {
+  const [statusRaw, devicesRaw, networkRaw, scenesRaw] = await Promise.all([
+    apiCall('/home/status'),
+    apiCall('/home/devices'),
+    apiCall('/home/network'),
+    apiCall('/home/scenes'),
+  ]);
+
+  const status = unwrap(statusRaw) || {};
+  const devices = unwrap(devicesRaw) || {};
+  const network = unwrap(networkRaw) || {};
+  const scenes = unwrap(scenesRaw) || {};
+
+  const adapters = status.adapters || {};
+  let adapterHtml = '';
+  for (const [name, available] of Object.entries(adapters)) {
+    const dot = available
+      ? '<span class="health-dot" style="background:var(--green)"></span>'
+      : '<span class="health-dot" style="background:var(--red)"></span>';
+    adapterHtml += `<div style="margin-bottom:6px;">${dot}<strong>${name}</strong> — ${available ? 'Connected' : 'Offline'}</div>`;
+  }
+  document.getElementById('home-adapters').innerHTML = adapterHtml || '<div style="color:var(--text-muted)">No adapters configured</div>';
+
+  document.getElementById('net-total').textContent = network.total || 0;
+  document.getElementById('net-online').textContent = network.online || 0;
+
+  const deviceList = devices.devices || [];
+  cachedHomeDevices = deviceList;
+  const totalDevices = devices.count || deviceList.length;
+  const onDevices = deviceList.filter(d => d.state?.on).length;
+  const lights = deviceList.filter(d => d.type === 'light').length;
+  const plugs = deviceList.filter(d => d.type === 'plug' || d.type === 'switch').length;
+
+  document.getElementById('home-device-summary').innerHTML = `
+    <div class="card"><h3>Total Devices</h3><div class="value">${totalDevices}</div><div class="sub">${Object.keys(adapters).length} adapters</div></div>
+    <div class="card"><h3>Devices On</h3><div class="value positive">${onDevices}</div><div class="sub">${totalDevices - onDevices} off</div></div>
+    <div class="card"><h3>Lights</h3><div class="value">${lights}</div><div class="sub">light type</div></div>
+    <div class="card"><h3>Plugs / Switches</h3><div class="value">${plugs}</div><div class="sub">plug/switch type</div></div>
+  `;
+
+  renderHomeDevices();
+
+  const sceneList = scenes.scenes || [];
+  document.getElementById('home-scenes-table').innerHTML = sceneList.length ? sceneList.map(sc => `
+    <tr>
+      <td><strong>${sc.name || sc.id}</strong></td>
+      <td><span class="badge badge-muted">${sc.adapter || '--'}</span></td>
+      <td>${sc.room || '--'}</td>
+      <td class="mono">${sc.deviceIds?.length || 0}</td>
+      <td><button class="btn btn-green" style="padding:4px 10px; font-size:.75rem;" onclick="activateScene('${sc.id}')">Activate</button></td>
+    </tr>
+  `).join('') : emptyRow(5, 'No scenes');
+
+  const netDevices = network.devices || [];
+  document.getElementById('home-network-table').innerHTML = netDevices.length ? netDevices.map(n => `
+    <tr>
+      <td class="mono">${n.ip}</td>
+      <td>${n.hostname || '--'}</td>
+      <td>${n.vendor || '--'}</td>
+      <td><span class="badge badge-muted">${n.deviceType || 'unknown'}</span></td>
+      <td class="mono" style="font-size:.75rem;">${n.mac || '--'}</td>
+      <td class="mono">${(n.openPorts || []).join(', ') || '--'}</td>
+      <td><span class="badge ${n.online ? 'badge-green' : 'badge-red'}">${n.online ? 'Online' : 'Offline'}</span></td>
+    </tr>
+  `).join('') : emptyRow(7, 'No network devices — run a scan');
+}
+
 /* ── Refresh dispatcher ── */
 
 async function refresh() {
@@ -843,6 +1046,7 @@ async function refresh() {
     else if (activeTab === 'market') await refreshMarket();
     else if (activeTab === 'knowledge') await refreshKnowledge();
     else if (activeTab === 'health') await refreshHealth();
+    else if (activeTab === 'home') await refreshHome();
   } catch (e) {
     logEvent('error', `Refresh failed: ${e.message}`);
   }
@@ -872,6 +1076,9 @@ function connectSSE() {
         logEvent('healer', `${t}: ${evt.payload?.service || evt.payload?.message || ''}`);
       } else if (t.startsWith('kpi:')) {
         logEvent('kpi', `${t}: cycle ${evt.payload?.cycleNumber || ''}`);
+      } else if (t.startsWith('home:')) {
+        logEvent('info', `${t}: ${evt.payload?.message || evt.payload?.total || ''}`);
+        if (activeTab === 'home') refreshHome();
       } else {
         logEvent('info', `${t}: ${JSON.stringify(evt.payload || {}).substring(0, 80)}`);
       }
