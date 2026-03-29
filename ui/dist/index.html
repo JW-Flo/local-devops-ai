@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Local DevOps AI Console</title>
+<style>
+:root {
+  --bg: #0f1117; --surface: #1a1d27; --surface2: #242837;
+  --border: #2e3348; --text: #e4e6f0; --text-muted: #8b8fa3;
+  --accent: #6366f1; --accent-hover: #818cf8;
+  --green: #22c55e; --green-bg: rgba(34,197,94,.12);
+  --red: #ef4444; --red-bg: rgba(239,68,68,.12);
+  --yellow: #eab308; --yellow-bg: rgba(234,179,8,.12);
+  --radius: 10px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:var(--bg); color:var(--text); line-height:1.6; min-height:100vh; }
+a { color:var(--accent); text-decoration:none; }
+.container { max-width:1200px; margin:0 auto; padding:20px; }
+.header { display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; }
+.header h1 { font-size:1.5rem; font-weight:700; }
+.header .sub { font-size:.85rem; color:var(--text-muted); }
+.badge { padding:4px 10px; border-radius:12px; font-size:.75rem; font-weight:600; }
+.badge-green { background:var(--green-bg); color:var(--green); }
+.badge-red { background:var(--red-bg); color:var(--red); }
+.badge-yellow { background:var(--yellow-bg); color:var(--yellow); }
+.badge-muted { background:var(--surface2); color:var(--text-muted); }
+.grid { display:grid; gap:16px; margin-bottom:24px; }
+.grid-4 { grid-template-columns: repeat(4, 1fr); }
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
+.grid-2 { grid-template-columns: repeat(2, 1fr); }
+@media (max-width:768px) { .grid-4,.grid-3,.grid-2 { grid-template-columns:1fr; } }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:20px; }
+.card h3 { font-size:.8rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:8px; }
+.card .value { font-size:1.6rem; font-weight:700; }
+.card .sub { font-size:.8rem; color:var(--text-muted); margin-top:4px; }
+.health-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+.btn { padding:8px 16px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface2);
+  color:var(--text); cursor:pointer; font-size:.85rem; font-weight:500; transition:all .15s; }
+.btn:hover { background:var(--accent); border-color:var(--accent); }
+.btn:disabled { opacity:.5; cursor:not-allowed; }
+.btn-danger { border-color:var(--red); color:var(--red); }
+.btn-danger:hover { background:var(--red); color:#fff; }
+.btn-green { border-color:var(--green); color:var(--green); }
+.btn-green:hover { background:var(--green); color:#fff; }
+table { width:100%; border-collapse:collapse; }
+th { text-align:left; font-size:.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;
+  padding:10px 12px; border-bottom:1px solid var(--border); }
+td { padding:10px 12px; border-bottom:1px solid var(--border); font-size:.85rem; }
+tr:hover { background:var(--surface2); }
+.mono { font-family:'JetBrains Mono','Fira Code',monospace; }
+.positive { color:var(--green); }
+.negative { color:var(--red); }
+.tabs { display:flex; gap:8px; margin-bottom:24px; border-bottom:1px solid var(--border); }
+.tab-btn { padding:10px 20px; border:none; background:transparent; color:var(--text-muted);
+  cursor:pointer; font-size:.85rem; font-weight:500; border-bottom:2px solid transparent;
+  transition:all .15s; }
+.tab-btn.active { color:var(--text); border-bottom-color:var(--accent); }
+.tab-btn:hover { color:var(--text); }
+.tab-content { display:none; }
+.tab-content.active { display:block; }
+.event-log { font-family:'JetBrains Mono','Fira Code',monospace; font-size:.8rem;
+  max-height:300px; overflow-y:auto; padding:12px; background:var(--bg); border-radius:6px;
+  border:1px solid var(--border); }
+.event { display:flex; gap:10px; padding:4px 0; }
+.event-time { color:var(--text-muted); min-width:80px; }
+.event-type { min-width:80px; }
+.status-healthy { color:var(--green); }
+.status-error { color:var(--red); }
+.status-pending { color:var(--yellow); }
+.loading { opacity:.5; pointer-events:none; }
+.spinner { display:inline-block; width:12px; height:12px; border:2px solid var(--border);
+  border-top-color:var(--accent); border-radius:50%; animation:spin .6s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.toast { position:fixed; bottom:24px; right:24px; padding:12px 20px; border-radius:var(--radius);
+  font-size:.85rem; z-index:1000; transition:opacity .3s; }
+.toast-error { background:var(--red-bg); color:var(--red); border:1px solid var(--red); }
+.toast-success { background:var(--green-bg); color:var(--green); border:1px solid var(--green); }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div>
+      <h1>Local DevOps AI Console</h1>
+      <div class="sub">Gateway · Orchestrator · Agents</div>
+    </div>
+    <div id="connection-status" class="badge badge-muted">Connecting...</div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('overview', this)">Overview</button>
+    <button class="tab-btn" onclick="switchTab('orchestrator', this)">Orchestrator</button>
+    <button class="tab-btn" onclick="switchTab('market', this)">Market Agent</button>
+    <button class="tab-btn" onclick="switchTab('finance', this)">Finance</button>
+    <button class="tab-btn" onclick="switchTab('knowledge', this)">Knowledge</button>
+    <button class="tab-btn" onclick="switchTab('health', this)">Health &amp; KPIs</button>
+  </div>
+
+  <!-- TAB 1: OVERVIEW -->
+  <div id="overview" class="tab-content active">
+    <div class="grid grid-4" id="health-cards"></div>
+    <div class="grid grid-4" id="stats-cards"></div>
+    <div class="card">
+      <h3>Live Event Stream</h3>
+      <div class="event-log" id="main-event-log">
+        <div class="event"><span class="event-time">--:--:--</span><span class="event-type">[info]</span><span>Connecting...</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 2: ORCHESTRATOR -->
+  <div id="orchestrator" class="tab-content">
+    <div class="grid grid-2">
+      <div class="card">
+        <h3>OpenClaw Status</h3>
+        <div style="padding:12px 0;">
+          <div><strong>Organization:</strong> <span id="org-name">--</span></div>
+          <div><strong>Version:</strong> <span id="oc-version" class="mono">--</span></div>
+          <div><strong>Model:</strong> <span id="oc-model" class="mono" style="font-size:.8rem;">--</span></div>
+          <div><strong>Gateway Port:</strong> <span id="oc-gateway" class="mono">--</span></div>
+          <div><strong>State:</strong> <span id="oc-state" class="badge badge-muted">--</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Infrastructure</h3>
+        <div style="padding:12px 0;">
+          <div><strong>Paired Devices:</strong> <span id="oc-devices">--</span></div>
+          <div><strong>Scheduled Jobs:</strong> <span id="oc-jobs">--</span></div>
+          <div><strong>Auth Providers:</strong> <span id="oc-auth">--</span></div>
+          <div><strong>WhatsApp:</strong> <span id="oc-whatsapp" class="badge badge-muted">--</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Active Sessions</h3>
+      <table>
+        <thead><tr><th>ID</th><th>Type</th><th>Size</th><th>Updated</th></tr></thead>
+        <tbody id="sessions-table"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Skills</h3>
+      <table>
+        <thead><tr><th>Name</th><th>Category</th><th>Status</th></tr></thead>
+        <tbody id="skills-table"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Recent Activity</h3>
+      <div class="event-log" id="activity-log"></div>
+    </div>
+  </div>
+
+  <!-- TAB 3: MARKET AGENT -->
+  <div id="market" class="tab-content">
+    <div id="market-status" style="margin-bottom:16px;"></div>
+    <div class="header" style="margin-bottom:16px;">
+      <div><h2>Weather Arbitrage Agent</h2></div>
+      <div id="market-controls">
+        <button class="btn btn-green" id="btn-market-start" onclick="doMarketAction('/start')">Start</button>
+        <button class="btn" id="btn-market-stop" onclick="doMarketAction('/stop')">Stop</button>
+        <button class="btn btn-danger" id="btn-market-kill" onclick="if(confirm('KILL SWITCH: Cancel all orders?')) doMarketAction('/kill')">KILL</button>
+      </div>
+    </div>
+
+    <div class="grid grid-4" id="market-kpi-cards"></div>
+
+    <div class="grid grid-2">
+      <div class="card">
+        <h3>City Forecasts</h3>
+        <table>
+          <thead><tr><th>City</th><th>High °F</th><th>Date</th><th>Series</th></tr></thead>
+          <tbody id="market-forecast-table"></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3>Active Signals</h3>
+        <table>
+          <thead><tr><th>Ticker</th><th>Edge</th><th>Kelly %</th><th>Side</th><th>Status</th></tr></thead>
+          <tbody id="market-signals-table"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Recent Trades</h3>
+      <table>
+        <thead><tr><th>Time</th><th>Ticker</th><th>Side</th><th>Price</th><th>Size</th><th>Edge</th></tr></thead>
+        <tbody id="market-trades-table"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Market Event Log</h3>
+      <div class="event-log" id="market-event-log"></div>
+    </div>
+  </div>
+
+  <!-- TAB 4: FINANCE -->
+  <div id="finance" class="tab-content">
+    <div class="header" style="margin-bottom:24px;">
+      <div>
+        <h1>Finance Agent</h1>
+        <span class="badge badge-yellow">Integration Pending</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <h3>Status</h3>
+      <p style="color:var(--text-muted); line-height:1.6;">
+        Plaid integration paused due to production cost requirements. Exploring alternative providers for live transaction data.
+      </p>
+    </div>
+
+    <div class="grid grid-2">
+      <div class="card"><h3>Accounts</h3><div class="value" style="color:var(--text-muted);">--</div><div class="sub">Awaiting integration</div></div>
+      <div class="card"><h3>Recent Transactions</h3><div class="value" style="color:var(--text-muted);">--</div><div class="sub">Awaiting integration</div></div>
+      <div class="card"><h3>Budget Categories</h3><div class="value" style="color:var(--text-muted);">--</div><div class="sub">Awaiting integration</div></div>
+      <div class="card"><h3>Monthly Spending</h3><div class="value" style="color:var(--text-muted);">--</div><div class="sub">Awaiting integration</div></div>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Explore Alternatives</h3>
+      <table>
+        <thead><tr><th>Provider</th><th>Type</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Teller</strong></td><td>Open banking API</td><td><span class="badge badge-muted">Research</span></td></tr>
+          <tr><td><strong>MX</strong></td><td>Aggregation + Insights</td><td><span class="badge badge-muted">Research</span></td></tr>
+          <tr><td><strong>Yodlee</strong></td><td>Aggregation platform</td><td><span class="badge badge-muted">Research</span></td></tr>
+          <tr><td><strong>Akoya</strong></td><td>Open finance network</td><td><span class="badge badge-muted">Research</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- TAB 5: KNOWLEDGE -->
+  <div id="knowledge" class="tab-content">
+    <div class="grid grid-2">
+      <div class="card">
+        <h3>Knowledge Config</h3>
+        <div style="padding:12px 0;">
+          <div><strong>Root Path:</strong> <span id="kb-path" class="mono">--</span></div>
+          <div><strong>Watcher:</strong> <span id="kb-watcher" class="badge badge-muted">--</span></div>
+          <div><strong>Qdrant Status:</strong> <span id="kb-qdrant" class="badge badge-muted">--</span></div>
+          <div><strong>Point Count:</strong> <span id="kb-points" class="value" style="font-size:1.2rem;">--</span></div>
+        </div>
+        <div style="margin-top:12px; display:flex; gap:8px;">
+          <button class="btn" id="btn-ingest" onclick="doKnowledgeAction('/knowledge/ingest', this)">Ingest</button>
+          <button class="btn" id="btn-fetch" onclick="doKnowledgeAction('/knowledge/fetch', this)">Fetch Sources</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Memory Stats</h3>
+        <div style="padding:12px 0;">
+          <div><strong>Vectors:</strong> <span id="mem-vectors" class="value" style="font-size:1.2rem;">--</span></div>
+          <div><strong>Qdrant Ready:</strong> <span id="mem-qdrant" class="badge badge-muted">--</span></div>
+          <div><strong>SQLite:</strong> <span id="mem-sqlite" class="value" style="font-size:1.2rem;">--</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Knowledge Sources</h3>
+      <table>
+        <thead><tr><th>Source</th><th>Type</th><th>Status</th><th>Last Sync</th></tr></thead>
+        <tbody id="sources-table"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Recent Memories (last 10)</h3>
+      <table>
+        <thead><tr><th>Title</th><th>Preview</th><th>Created</th></tr></thead>
+        <tbody id="memories-table"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- TAB 6: HEALTH & KPIs -->
+  <div id="health" class="tab-content">
+    <div class="grid grid-3">
+      <div class="card">
+        <h3>Self-Healer Stats</h3>
+        <div style="padding:12px 0;">
+          <div><strong>Uptime:</strong> <span id="healer-uptime">--</span></div>
+          <div><strong>Cycles:</strong> <span id="healer-cycles" class="value" style="font-size:1.2rem;">--</span></div>
+          <div><strong>Issues Fixed:</strong> <span id="healer-fixed" class="positive value" style="font-size:1.2rem;">--</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>SLA / KPI Summary</h3>
+        <div style="padding:12px 0;">
+          <div><strong>Success Rate:</strong> <span id="sla-avail" class="value positive" style="font-size:1.2rem;">--</span></div>
+          <div><strong>Tasks Dispatched:</strong> <span id="sla-dispatched" class="mono">--</span></div>
+          <div><strong>Remediation Rate:</strong> <span id="sla-remediation" class="mono">--</span></div>
+          <div><strong>Top Failure:</strong> <span id="sla-failure" style="color:var(--text-muted);">--</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Last Agent Cycle</h3>
+        <div style="padding:12px 0;">
+          <div><strong>Cycle #:</strong> <span id="kpi-cycle" class="mono">--</span></div>
+          <div><strong>Duration:</strong> <span id="kpi-duration" class="mono">--</span></div>
+          <div><strong>Roadmap Items:</strong> <span id="kpi-roadmap" class="mono">--</span></div>
+          <div><strong>Tasks:</strong> <span id="kpi-tasks" class="mono">--</span></div>
+          <div><strong>Cost:</strong> <span id="kpi-cost" class="mono">--</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Service Health</h3>
+      <table>
+        <thead><tr><th>Service</th><th>Port</th><th>Status</th><th>Response</th></tr></thead>
+        <tbody id="services-table"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Provider Health</h3>
+      <table>
+        <thead><tr><th>Provider</th><th>Status</th><th>Last Check</th></tr></thead>
+        <tbody id="providers-table"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Recent Issues (last 20)</h3>
+      <table>
+        <thead><tr><th>Time</th><th>Service</th><th>Issue</th><th>Status</th></tr></thead>
+        <tbody id="issues-table"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Cycle History (last 10)</h3>
+      <table>
+        <thead><tr><th>Time</th><th>Duration</th><th>Tasks</th><th>Result</th></tr></thead>
+        <tbody id="history-table"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+const API = window.location.origin;
+let activeTab = 'overview';
+let refreshTimer = null;
+let sseOpen = false;
+let sseRetries = 0;
+const MAX_SSE_RETRIES = 10;
+
+/* ── Helpers ── */
+
+async function apiCall(path) {
+  try {
+    const res = await fetch(`${API}${path}`, { headers: { 'Accept': 'application/json' } });
+    if (!res.ok) throw new Error(`${res.status}`);
+    return await res.json();
+  } catch (e) {
+    logEvent('error', `${path}: ${e.message}`);
+    return null;
+  }
+}
+
+async function apiPost(path, body = {}) {
+  try {
+    const res = await fetch(`${API}${path}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`${res.status}`);
+    return await res.json();
+  } catch (e) {
+    logEvent('error', `POST ${path}: ${e.message}`);
+    showToast(`Failed: ${path}`, 'error');
+    return null;
+  }
+}
+
+/* Unwrap { status, data } wrapper used by most endpoints */
+function unwrap(response) {
+  if (!response) return null;
+  if (response.data !== undefined) return response.data;
+  return response;
+}
+
+/* Convert { key: {name,...}, key2: {name,...} } objects to arrays */
+function objToArray(obj) {
+  if (!obj) return [];
+  if (Array.isArray(obj)) return obj;
+  return Object.entries(obj).map(([k, v]) => (typeof v === 'object' ? { name: k, ...v } : { name: k, value: v }));
+}
+
+function switchTab(tab, btn) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById(tab).classList.add('active');
+  if (btn) btn.classList.add('active');
+  activeTab = tab;
+  refresh();
+}
+
+function logEvent(type, msg) {
+  const log = document.getElementById('main-event-log');
+  if (!log) return;
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+  const colors = {
+    signal: 'var(--accent)', trade: 'var(--green)', kill: 'var(--red)',
+    start: 'var(--green)', stop: 'var(--yellow)', error: 'var(--red)',
+    info: 'var(--text-muted)', market: 'var(--accent)', agent: 'var(--accent)',
+    healer: 'var(--yellow)', kpi: 'var(--green)',
+  };
+  const color = colors[type] || 'var(--text-muted)';
+  const div = document.createElement('div');
+  div.className = 'event';
+  div.innerHTML = `<span class="event-time">${ts}</span><span class="event-type" style="color:${color}">[${type}]</span><span>${msg}</span>`;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  while (log.children.length > 100) log.removeChild(log.firstChild);
+}
+
+function showToast(msg, type = 'success') {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = msg;
+  container.appendChild(toast);
+  setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
+}
+
+function emptyRow(cols, msg) {
+  return `<tr><td colspan="${cols}" style="text-align:center;color:var(--text-muted)">${msg}</td></tr>`;
+}
+
+function fmtTime(ts) {
+  if (!ts) return '--';
+  try { return new Date(ts).toLocaleTimeString('en-US', { hour12: false }); } catch { return '--'; }
+}
+
+function fmtDate(ts) {
+  if (!ts) return '--';
+  try { return new Date(ts).toLocaleDateString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }); } catch { return '--'; }
+}
+
+function fmtMs(ms) {
+  if (!ms && ms !== 0) return '--';
+  if (ms < 1000) return ms + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  return (ms / 60000).toFixed(1) + 'min';
+}
+
+/* ── Overview ── */
+
+async function refreshOverview() {
+  const [healthRaw, kpiRaw] = await Promise.all([
+    apiCall('/health'),
+    apiCall('/kpi'),
+  ]);
+
+  const health = healthRaw || {};
+  const kpi = unwrap(kpiRaw) || {};
+  const lastCycle = kpi.lastCycle || {};
+
+  // Health cards — check each service independently
+  // Also check OpenClaw health
+  const ocStatus = await apiCall('/openclaw/status');
+
+  const svcChecks = [
+    { name: 'Gateway', port: 4123, healthy: health.status === 'ok' },
+    { name: 'OpenClaw', port: ocStatus?.gatewayPort || 18789, healthy: ocStatus?.gatewayHealthy !== false && !!ocStatus?.version },
+    { name: 'Qdrant', port: 6333, healthy: false },
+    { name: 'Ollama', port: 11434, healthy: false },
+  ];
+
+  // Check service health via healer/services endpoint (returns object keyed by name)
+  const svcData = unwrap(await apiCall('/healer/services'));
+  if (svcData && typeof svcData === 'object') {
+    const svcArr = objToArray(svcData);
+    for (const s of svcArr) {
+      const match = svcChecks.find(c => c.name.toLowerCase() === (s.name || '').toLowerCase());
+      if (match) {
+        match.healthy = s.consecutiveDownChecks === 0 && !!s.lastUp;
+        if (s.url) try { match.port = Number(new URL(s.url).port); } catch {}
+      }
+    }
+  }
+  // Gateway is always from /health
+  svcChecks[0].healthy = health.status === 'ok';
+
+  let healthHtml = '';
+  for (const svc of svcChecks) {
+    const dot = svc.healthy
+      ? '<span class="health-dot" style="background:var(--green)"></span>'
+      : '<span class="health-dot" style="background:var(--red)"></span>';
+    healthHtml += `<div class="card"><h3>${svc.name}</h3><div>${dot}Port ${svc.port}</div><div class="sub">${svc.healthy ? 'Healthy' : 'Offline'}</div></div>`;
+  }
+  document.getElementById('health-cards').innerHTML = healthHtml;
+
+  // Stats cards from KPI data
+  const successRate = lastCycle.successRate != null ? (lastCycle.successRate * 100).toFixed(0) + '%' : '--';
+  const totalTasks = lastCycle.tasksGenerated || '--';
+  const totalDispatched = lastCycle.tasksDispatched || '--';
+  const totalCycles = lastCycle.cycleNumber || '--';
+
+  document.getElementById('stats-cards').innerHTML = `
+    <div class="card"><h3>Agent Cycle</h3><div class="value">#${totalCycles}</div><div class="sub">Latest cycle</div></div>
+    <div class="card"><h3>Success Rate</h3><div class="value positive">${successRate}</div><div class="sub">Last cycle</div></div>
+    <div class="card"><h3>Tasks Generated</h3><div class="value">${totalTasks}</div><div class="sub">${totalDispatched} dispatched</div></div>
+    <div class="card"><h3>LLM Provider</h3><div class="value" style="font-size:1rem;">${health.llmProvider || '--'}</div><div class="sub mono" style="font-size:.7rem;">${health.openrouterModel || health.bedrockModel || '--'}</div></div>
+  `;
+}
+
+/* ── Orchestrator ── */
+
+async function refreshOrchestrator() {
+  const [status, sessions, skills, activity] = await Promise.all([
+    apiCall('/openclaw/status'),
+    apiCall('/openclaw/sessions'),
+    apiCall('/openclaw/skills'),
+    apiCall('/openclaw/activity'),
+  ]);
+
+  const s = status || {};
+  document.getElementById('org-name').textContent = s.channels?.whatsapp ? 'Gastown (WhatsApp)' : 'Gastown';
+  document.getElementById('oc-version').textContent = s.version || '--';
+  document.getElementById('oc-model').textContent = s.model || '--';
+  document.getElementById('oc-gateway').textContent = s.gatewayPort || '--';
+
+  const stateEl = document.getElementById('oc-state');
+  const isHealthy = s.gatewayHealthy !== false;
+  stateEl.textContent = isHealthy ? 'Running' : 'Offline';
+  stateEl.className = `badge ${isHealthy ? 'badge-green' : 'badge-red'}`;
+
+  // Infrastructure
+  document.getElementById('oc-devices').textContent =
+    s.devices ? `${s.devices.pairedCount || 0} (${(s.devices.displayNames || []).join(', ') || 'none'})` : '--';
+  document.getElementById('oc-jobs').textContent = s.jobs ? (s.jobs.scheduledCount || 0) : '--';
+  document.getElementById('oc-auth').textContent =
+    s.authProviders ? s.authProviders.map(a => a.provider).join(', ') : '--';
+  const waEl = document.getElementById('oc-whatsapp');
+  const waEnabled = s.channels?.whatsapp;
+  waEl.textContent = waEnabled ? 'Enabled' : 'Disabled';
+  waEl.className = `badge ${waEnabled ? 'badge-green' : 'badge-muted'}`;
+
+  // Sessions
+  const sessList = (sessions || {}).sessions || [];
+  document.getElementById('sessions-table').innerHTML = sessList.length ? sessList.map(ss => `
+    <tr><td class="mono" style="font-size:.75rem;">${ss.id || '--'}</td><td>${ss.type || 'chat'}</td><td>${ss.size || '--'}</td><td style="color:var(--text-muted)">${ss.updated || '--'}</td></tr>
+  `).join('') : emptyRow(4, 'No sessions');
+
+  // Skills
+  const skillList = (skills || {}).skills || [];
+  document.getElementById('skills-table').innerHTML = skillList.length ? skillList.map(sk => `
+    <tr><td><strong>${sk.name || '--'}</strong></td><td>${sk.category || 'core'}</td><td><span class="badge badge-green">Active</span></td></tr>
+  `).join('') : emptyRow(3, 'No skills');
+
+  // Activity — wire to /openclaw/activity
+  const act = activity || {};
+  const actLog = document.getElementById('activity-log');
+  let actHtml = '';
+  const configEvents = act.configEvents || [];
+  const recentMsgs = act.recentMessages || [];
+  if (configEvents.length) {
+    configEvents.slice(-10).forEach(ev => {
+      actHtml += `<div class="event"><span class="event-time">${fmtTime(ev.timestamp)}</span><span class="event-type" style="color:var(--accent)">[config]</span><span>${ev.action || ev.message || JSON.stringify(ev).substring(0, 80)}</span></div>`;
+    });
+  }
+  if (recentMsgs.length) {
+    recentMsgs.slice(-10).forEach(m => {
+      actHtml += `<div class="event"><span class="event-time">${fmtTime(m.timestamp)}</span><span class="event-type" style="color:var(--green)">[msg]</span><span>${(m.content || m.text || '').substring(0, 100)}</span></div>`;
+    });
+  }
+  if (!actHtml) actHtml = `<div class="event"><span style="color:var(--text-muted)">No recent activity · Last refresh: ${new Date().toLocaleTimeString()}</span></div>`;
+  actLog.innerHTML = actHtml;
+}
+
+/* ── Market Agent ── */
+
+async function doMarketAction(path) {
+  const btns = document.querySelectorAll('#market-controls .btn');
+  btns.forEach(b => b.disabled = true);
+  const result = await apiPost(`/market${path}`);
+  btns.forEach(b => b.disabled = false);
+  if (result) {
+    showToast(`Market ${path.replace('/', '')} executed`, 'success');
+    logEvent('market', `Action: ${path}`);
+  }
+  refreshMarket();
+}
+
+async function refreshMarket() {
+  const [status, forecasts, signals] = await Promise.all([
+    apiCall('/market/status'),
+    apiCall('/market/forecasts'),
+    apiCall('/market/signals'),
+  ]);
+
+  const d = status || {};
+
+  // Status badges
+  let statusBar = '';
+  if (d.running) {
+    const mode = d.safety?.dryRun ? '<span class="badge badge-yellow">DRY RUN</span>' : '<span class="badge badge-red">LIVE</span>';
+    const ws = d.wsConnected ? '<span class="badge badge-green">WS Connected</span>' : '<span class="badge badge-red">WS Off</span>';
+    const mkts = `<span class="badge badge-muted">${d.marketCount || 0} markets</span>`;
+    statusBar = `${mode} ${ws} ${mkts}`;
+  }
+  document.getElementById('market-status').innerHTML = statusBar;
+
+  // KPI cards
+  document.getElementById('market-kpi-cards').innerHTML = `
+    <div class="card">
+      <h3>Status</h3>
+      <div class="value ${d.running ? 'positive' : ''}">${d.running ? 'Running' : 'Stopped'}</div>
+      <div class="sub">${d.safety?.dryRun ? 'Dry Run' : 'Live'}</div>
+    </div>
+    <div class="card">
+      <h3>Balance</h3>
+      <div class="value mono">$${Number(d.bankroll || 0).toFixed(2)}</div>
+      <div class="sub">${d.safety ? `Max position: $${d.safety.maxPositionSize || 0}` : '--'}</div>
+    </div>
+    <div class="card">
+      <h3>Signals</h3>
+      <div class="value">${d.signals || 0}</div>
+      <div class="sub">Active signals</div>
+    </div>
+    <div class="card">
+      <h3>Markets</h3>
+      <div class="value">${d.marketCount || 0}</div>
+      <div class="sub">Tracked markets</div>
+    </div>
+  `;
+
+  // Forecasts
+  const forecastList = (forecasts || {}).forecasts || [];
+  document.getElementById('market-forecast-table').innerHTML = forecastList.length ? forecastList.map(f => `
+    <tr>
+      <td><strong>${f.city}</strong></td>
+      <td class="mono">${f.highF != null ? f.highF + '°F' : '--'}</td>
+      <td>${f.targetDate || '--'}</td>
+      <td><span class="badge badge-muted">${f.seriesTicker || '--'}</span></td>
+    </tr>
+  `).join('') : emptyRow(4, 'No forecasts');
+
+  // Signals
+  const signalList = (signals || {}).signals || [];
+  document.getElementById('market-signals-table').innerHTML = signalList.length ? signalList.map(s => `
+    <tr>
+      <td class="mono">${s.ticker || '--'}</td>
+      <td class="mono ${(s.edge || 0) > 0 ? 'positive' : 'negative'}">${((s.edge || 0) * 100).toFixed(1)}¢</td>
+      <td class="mono">${((s.kelly || s.kellyPct || 0) * 100).toFixed(1)}%</td>
+      <td><span class="badge ${s.side === 'yes' ? 'badge-green' : 'badge-red'}">${s.side || '--'}</span></td>
+      <td><span class="badge ${s.status === 'executed' ? 'badge-green' : s.status === 'rejected' ? 'badge-red' : 'badge-yellow'}">${s.status || 'pending'}</span></td>
+    </tr>
+  `).join('') : emptyRow(5, 'No signals');
+
+  // Trades
+  const trades = d.trades || d.recentTrades || [];
+  document.getElementById('market-trades-table').innerHTML = trades.length ? trades.map(t => `
+    <tr>
+      <td style="color:var(--text-muted)">${fmtTime(t.timestamp)}</td>
+      <td class="mono">${t.ticker || '--'}</td>
+      <td><span class="badge ${t.side === 'yes' ? 'badge-green' : 'badge-red'}">${t.side || '--'}</span></td>
+      <td class="mono">$${Number(t.price || 0).toFixed(2)}</td>
+      <td class="mono">${t.size || '--'}</td>
+      <td class="mono positive">${((t.edge || 0) * 100).toFixed(1)}¢</td>
+    </tr>
+  `).join('') : emptyRow(6, 'No trades');
+}
+
+/* ── Knowledge ── */
+
+async function doKnowledgeAction(path, btn) {
+  if (btn) btn.disabled = true;
+  const result = await apiPost(path);
+  if (btn) btn.disabled = false;
+  if (result) showToast(`${path} completed`, 'success');
+  refreshKnowledge();
+}
+
+async function refreshKnowledge() {
+  const [kbRaw, sourcesRaw, memRaw, memoriesRaw] = await Promise.all([
+    apiCall('/knowledge'),
+    apiCall('/knowledge/sources'),
+    apiCall('/memories/stats'),
+    apiCall('/memories?limit=10'),
+  ]);
+
+  const kb = unwrap(kbRaw) || {};
+  const mem = unwrap(memRaw) || {};
+
+  document.getElementById('kb-path').textContent = kb.root || '--';
+  const watchEl = document.getElementById('kb-watcher');
+  watchEl.textContent = kb.watch ? 'Active' : 'Inactive';
+  watchEl.className = `badge ${kb.watch ? 'badge-green' : 'badge-muted'}`;
+  const qdEl = document.getElementById('kb-qdrant');
+  qdEl.textContent = kb.qdrantHealthy ? 'Connected' : 'Offline';
+  qdEl.className = `badge ${kb.qdrantHealthy ? 'badge-green' : 'badge-red'}`;
+  document.getElementById('kb-points').textContent = kb.points || 0;
+
+  document.getElementById('mem-vectors').textContent = mem.points || 0;
+  const mqEl = document.getElementById('mem-qdrant');
+  mqEl.textContent = mem.qdrantReady ? 'Ready' : 'Offline';
+  mqEl.className = `badge ${mem.qdrantReady ? 'badge-green' : 'badge-red'}`;
+  document.getElementById('mem-sqlite').textContent = mem.sqlite || '--';
+
+  // Sources
+  const sources = unwrap(sourcesRaw);
+  const sourceList = Array.isArray(sources) ? sources : (sources?.sources || []);
+  document.getElementById('sources-table').innerHTML = sourceList.length ? sourceList.map(src => `
+    <tr>
+      <td><strong>${src.name || src.url || '--'}</strong></td>
+      <td>${src.type || 'file'}</td>
+      <td><span class="badge ${src.enabled ? 'badge-green' : 'badge-muted'}">${src.enabled ? 'Enabled' : 'Disabled'}</span></td>
+      <td style="color:var(--text-muted)">${fmtDate(src.lastSync) || '--'}</td>
+    </tr>
+  `).join('') : emptyRow(4, 'No sources configured');
+
+  // Memories
+  const memories = unwrap(memoriesRaw);
+  const memList = Array.isArray(memories) ? memories : (memories?.memories || []);
+  document.getElementById('memories-table').innerHTML = memList.length ? memList.map(m => `
+    <tr>
+      <td><strong>${(m.title || '').substring(0, 50) || (m.id || '').substring(0, 8)}</strong></td>
+      <td style="color:var(--text-muted); font-size:.8rem;">${(m.details || m.content || '').substring(0, 60)}${(m.details || m.content || '').length > 60 ? '...' : ''}</td>
+      <td style="color:var(--text-muted)">${fmtDate(m.createdAt || m.created)}</td>
+    </tr>
+  `).join('') : emptyRow(3, 'No memories');
+}
+
+/* ── Health & KPIs ── */
+
+async function refreshHealth() {
+  const [healerRaw, servicesRaw, providersRaw, issuesRaw, historyRaw, kpiRaw] = await Promise.all([
+    apiCall('/healer/stats'),
+    apiCall('/healer/services'),
+    apiCall('/healer/providers'),
+    apiCall('/healer/issues?limit=20'),
+    apiCall('/kpi/history?limit=10'),
+    apiCall('/kpi'),
+  ]);
+
+  const healer = unwrap(healerRaw) || {};
+  const kpi = unwrap(kpiRaw) || {};
+  const lastCycle = kpi.lastCycle || {};
+
+  // Healer stats
+  document.getElementById('healer-uptime').textContent = healer.uptimeMs ? fmtMs(healer.uptimeMs) : (healer.uptime || '--');
+  document.getElementById('healer-cycles').textContent = kpi.totalCycles || healer.watchdogCycles || healer.cycles || 0;
+  document.getElementById('healer-fixed').textContent = healer.totalIssues || healer.issuesFixed || 0;
+
+  // KPI / SLA
+  const sr = lastCycle.successRate != null ? (lastCycle.successRate * 100).toFixed(1) + '%' : '--';
+  document.getElementById('sla-avail').textContent = sr;
+  document.getElementById('sla-dispatched').textContent = lastCycle.tasksDispatched || '--';
+  const rr = lastCycle.remediationRate != null ? (lastCycle.remediationRate * 100).toFixed(1) + '%' : '--';
+  document.getElementById('sla-remediation').textContent = rr;
+  const failures = kpi.topFailures || [];
+  document.getElementById('sla-failure').textContent = failures.length ? `${failures[0].reason} (${failures[0].count}x)` : 'None';
+
+  // Last cycle detail
+  document.getElementById('kpi-cycle').textContent = lastCycle.cycleNumber || '--';
+  document.getElementById('kpi-duration').textContent = fmtMs(lastCycle.durationMs);
+  document.getElementById('kpi-roadmap').textContent = lastCycle.roadmapItemsParsed || '--';
+  document.getElementById('kpi-tasks').textContent =
+    `${lastCycle.tasksSucceeded || 0}/${lastCycle.tasksDispatched || 0} succeeded, ${lastCycle.tasksFailed || 0} failed`;
+  document.getElementById('kpi-cost').textContent = lastCycle.estimatedCostUsd != null
+    ? `$${lastCycle.estimatedCostUsd.toFixed(4)} (${lastCycle.totalTokens || 0} tokens)`
+    : '--';
+
+  // Service health — API returns { qdrant: {...}, ollama: {...} } object
+  const svcList = unwrap(servicesRaw);
+  const services = objToArray(svcList);
+  document.getElementById('services-table').innerHTML = services.length ? services.map(s => {
+    const isUp = s.consecutiveDownChecks === 0 && s.lastUp;
+    const port = s.url ? new URL(s.url).port : '--';
+    return `<tr>
+      <td>${s.name || '--'}</td>
+      <td class="mono">${port}</td>
+      <td><span class="badge ${isUp ? 'badge-green' : 'badge-red'}">${isUp ? 'healthy' : 'down'}</span></td>
+      <td class="mono">${s.lastCheck ? fmtTime(s.lastCheck) : '--'}</td>
+    </tr>`;
+  }).join('') : emptyRow(4, 'No services');
+
+  // Provider health — from healer stats providerHealth object
+  const provObj = healer.providerHealth || {};
+  const providers = objToArray(provObj);
+  document.getElementById('providers-table').innerHTML = providers.length ? providers.map(p => {
+    const isOk = !p.disabled && p.consecutiveFailures === 0;
+    return `<tr>
+      <td>${p.name || '--'}</td>
+      <td><span class="badge ${isOk ? 'badge-green' : p.disabled ? 'badge-red' : 'badge-yellow'}">${p.disabled ? 'disabled' : isOk ? 'healthy' : `${p.consecutiveFailures} failures`}</span></td>
+      <td style="color:var(--text-muted)">${fmtDate(p.lastSuccess || p.lastFailure)}</td>
+    </tr>`;
+  }).join('') : emptyRow(3, 'No providers');
+
+  // Issues
+  const issRaw = unwrap(issuesRaw);
+  const issues = Array.isArray(issRaw) ? issRaw : objToArray(issRaw);
+  document.getElementById('issues-table').innerHTML = issues.length ? issues.map(iss => `
+    <tr>
+      <td style="color:var(--text-muted)">${fmtTime(iss.timestamp || iss.detectedAt)}</td>
+      <td>${iss.service || '--'}</td>
+      <td>${iss.message || iss.issue || '--'}</td>
+      <td><span class="badge ${iss.resolved || iss.fixedAt ? 'badge-green' : 'badge-red'}">${iss.resolved || iss.fixedAt ? 'Resolved' : 'Open'}</span></td>
+    </tr>
+  `).join('') : emptyRow(4, 'No issues — all clear');
+
+  // Cycle history — prefer recentCycles from /kpi, fallback to /kpi/history
+  const histFromKpi = kpi.recentCycles || [];
+  const histFromApi = unwrap(historyRaw);
+  const history = histFromKpi.length ? histFromKpi : (Array.isArray(histFromApi) ? histFromApi : objToArray(histFromApi));
+  document.getElementById('history-table').innerHTML = history.length ? history.map(h => `
+    <tr>
+      <td style="color:var(--text-muted)">${fmtDate(h.timestamp)}</td>
+      <td class="mono">${fmtMs(h.durationMs || h.duration)}</td>
+      <td>${h.tasksDispatched || h.checks || 0} dispatched</td>
+      <td><span class="badge ${(h.successRate || 0) >= 1 ? 'badge-green' : h.tasksFailed ? 'badge-red' : 'badge-yellow'}">
+        ${h.tasksSucceeded || 0}/${h.tasksDispatched || h.checks || 0} ok
+      </span></td>
+    </tr>
+  `).join('') : emptyRow(4, 'No history');
+}
+
+/* ── Refresh dispatcher ── */
+
+async function refresh() {
+  try {
+    if (activeTab === 'overview') await refreshOverview();
+    else if (activeTab === 'orchestrator') await refreshOrchestrator();
+    else if (activeTab === 'market') await refreshMarket();
+    else if (activeTab === 'knowledge') await refreshKnowledge();
+    else if (activeTab === 'health') await refreshHealth();
+  } catch (e) {
+    logEvent('error', `Refresh failed: ${e.message}`);
+  }
+}
+
+/* ── SSE ── */
+
+function connectSSE() {
+  if (sseOpen || sseRetries >= MAX_SSE_RETRIES) return;
+  sseOpen = true;
+  const es = new EventSource(`${API}/events`);
+  es.onopen = () => {
+    sseRetries = 0;
+    document.getElementById('connection-status').className = 'badge badge-green';
+    document.getElementById('connection-status').textContent = 'Connected';
+    logEvent('info', 'SSE connected');
+  };
+  es.onmessage = (e) => {
+    try {
+      const evt = JSON.parse(e.data);
+      const t = evt.type || '';
+      if (t.startsWith('market:')) {
+        logEvent('market', `${t}: ${evt.payload?.ticker || evt.payload?.message || ''}`);
+      } else if (t.startsWith('agent:')) {
+        logEvent('agent', `${t}: ${evt.payload?.message || ''}`);
+      } else if (t.startsWith('healer:')) {
+        logEvent('healer', `${t}: ${evt.payload?.service || evt.payload?.message || ''}`);
+      } else if (t.startsWith('kpi:')) {
+        logEvent('kpi', `${t}: cycle ${evt.payload?.cycleNumber || ''}`);
+      } else {
+        logEvent('info', `${t}: ${JSON.stringify(evt.payload || {}).substring(0, 80)}`);
+      }
+    } catch {}
+  };
+  es.onerror = () => {
+    sseOpen = false;
+    sseRetries++;
+    document.getElementById('connection-status').className = 'badge badge-red';
+    document.getElementById('connection-status').textContent = 'Disconnected';
+    logEvent('error', `SSE disconnected (retry ${sseRetries}/${MAX_SSE_RETRIES})`);
+    es.close();
+    if (sseRetries < MAX_SSE_RETRIES) setTimeout(connectSSE, 5000 * Math.min(sseRetries, 4));
+  };
+}
+
+/* ── Init ── */
+logEvent('info', 'Dashboard loaded');
+refresh();
+refreshTimer = setInterval(refresh, 5000);
+connectSSE();
+</script>
+</body>
+</html>
