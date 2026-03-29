@@ -102,7 +102,7 @@ tr:hover { background:var(--surface2); }
 
   <!-- TAB 1: OVERVIEW -->
   <div id="overview" class="tab-content active">
-    <div class="grid grid-4" id="health-cards"></div>
+    <div class="grid grid-3" id="health-cards"></div>
     <div class="grid grid-4" id="stats-cards"></div>
     <div class="card">
       <h3>Live Event Stream</h3>
@@ -521,9 +521,11 @@ function fmtMs(ms) {
 /* ── Overview ── */
 
 async function refreshOverview() {
-  const [healthRaw, kpiRaw] = await Promise.all([
+  const [healthRaw, kpiRaw, ghRepos, homeStatus] = await Promise.all([
     apiCall('/health'),
     apiCall('/kpi'),
+    apiCall('/github/repos').catch(() => null),
+    apiCall('/home/status').catch(() => null),
   ]);
 
   const health = healthRaw || {};
@@ -534,11 +536,23 @@ async function refreshOverview() {
   // Also check OpenClaw health
   const ocStatus = await apiCall('/openclaw/status');
 
+  // GitHub connection
+  const ghOk = Array.isArray(ghRepos) ? ghRepos.length > 0 : !!(ghRepos && !ghRepos.error);
+  const ghCount = Array.isArray(ghRepos) ? ghRepos.length : ghRepos?.repos?.length || 0;
+
+  // Home adapters
+  const homeData = unwrap(homeStatus) || homeStatus || {};
+  const adapters = homeData.adapters || {};
+  const homeOnline = Object.values(adapters).filter(Boolean).length;
+  const homeTotal = Object.keys(adapters).length;
+
   const svcChecks = [
     { name: 'Gateway', port: 4123, healthy: health.status === 'ok' },
     { name: 'OpenClaw', port: ocStatus?.gatewayPort || 18789, healthy: ocStatus?.gatewayHealthy !== false && !!ocStatus?.version },
     { name: 'Qdrant', port: 6333, healthy: false },
     { name: 'Ollama', port: 11434, healthy: false },
+    { name: 'GitHub', port: null, healthy: ghOk, sub: ghOk ? `${ghCount} repos` : 'No GH_PAT' },
+    { name: 'Home', port: null, healthy: homeOnline > 0, sub: `${homeOnline}/${homeTotal} adapters` },
   ];
 
   // Check service health via healer/services endpoint (returns object keyed by name)
@@ -561,7 +575,9 @@ async function refreshOverview() {
     const dot = svc.healthy
       ? '<span class="health-dot" style="background:var(--green)"></span>'
       : '<span class="health-dot" style="background:var(--red)"></span>';
-    healthHtml += `<div class="card"><h3>${svc.name}</h3><div>${dot}Port ${svc.port}</div><div class="sub">${svc.healthy ? 'Healthy' : 'Offline'}</div></div>`;
+    const portInfo = svc.port ? `Port ${svc.port}` : (svc.healthy ? 'Connected' : 'Disconnected');
+    const subText = svc.sub || (svc.healthy ? 'Healthy' : 'Offline');
+    healthHtml += `<div class="card"><h3>${svc.name}</h3><div>${dot}${portInfo}</div><div class="sub">${subText}</div></div>`;
   }
   document.getElementById('health-cards').innerHTML = healthHtml;
 
@@ -648,12 +664,19 @@ async function refreshOrchestrator() {
 async function doMarketAction(path) {
   const btns = document.querySelectorAll('#market-controls .btn');
   btns.forEach(b => b.disabled = true);
-  const result = await apiPost(`/market${path}`);
-  btns.forEach(b => b.disabled = false);
-  if (result) {
-    showToast(`Market ${path.replace('/', '')} executed`, 'success');
-    logEvent('market', `Action: ${path}`);
+  try {
+    const res = await fetch(`${API}/market${path}`, { method: 'POST' }).then(r => r.json());
+    if (res.status === 'error') {
+      showToast(`Market ${path}: ${res.message}`, 'error');
+      logEvent('market', `Error: ${res.message}`);
+    } else {
+      showToast(`Market ${path.replace('/', '')} executed`, 'success');
+      logEvent('market', `Action: ${path}`);
+    }
+  } catch (e) {
+    showToast(`Market ${path}: ${e.message}`, 'error');
   }
+  btns.forEach(b => b.disabled = false);
   refreshMarket();
 }
 
@@ -668,11 +691,15 @@ async function refreshMarket() {
 
   // Status badges
   let statusBar = '';
-  if (d.running) {
+  if (d.error && d.error.includes('credentials')) {
+    statusBar = '<span class="badge badge-red">No Kalshi Credentials</span> <span style="font-size:.8rem;color:var(--text-muted)">Set KALSHI_EMAIL + KALSHI_PASSWORD in gateway .env</span>';
+  } else if (d.running) {
     const mode = d.safety?.dryRun ? '<span class="badge badge-yellow">DRY RUN</span>' : '<span class="badge badge-red">LIVE</span>';
     const ws = d.wsConnected ? '<span class="badge badge-green">WS Connected</span>' : '<span class="badge badge-red">WS Off</span>';
     const mkts = `<span class="badge badge-muted">${d.marketCount || 0} markets</span>`;
     statusBar = `${mode} ${ws} ${mkts}`;
+  } else {
+    statusBar = '<span class="badge badge-muted">Agent Stopped</span> <span style="font-size:.8rem;color:var(--text-muted)">Click Start to begin weather arbitrage</span>';
   }
   document.getElementById('market-status').innerHTML = statusBar;
 
@@ -911,8 +938,26 @@ function renderHomeDevices() {
 
   document.getElementById('home-devices-table').innerHTML = filtered.length ? filtered.map(d => {
     const isOn = d.state?.on;
-    const brightness = d.state?.brightness != null ? d.state.brightness + '%' : '--';
+    const bri = d.state?.brightness;
+    const ct = d.state?.colorTemp;
+    const hue = d.state?.hue;
+    const sat = d.state?.saturation;
     const reachable = d.state?.reachable !== false;
+    const isHue = d.adapter === 'hue';
+    const isGovee = d.adapter === 'govee';
+    const canDim = isHue || isGovee;
+
+    // Color indicator
+    let colorDot = '';
+    if (hue != null && sat != null) {
+      const h = Math.round((hue / 65535) * 360);
+      colorDot = `<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:hsl(${h},${Math.round((sat/254)*100)}%,50%);border:1px solid var(--border);vertical-align:middle;margin-right:4px;"></span>`;
+    } else if (ct != null) {
+      const warm = Math.min(Math.max((ct - 153) / (500 - 153), 0), 1);
+      const r = 255, g = Math.round(180 + 75 * (1 - warm)), b = Math.round(100 + 155 * (1 - warm));
+      colorDot = `<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:rgb(${r},${g},${b});border:1px solid var(--border);vertical-align:middle;margin-right:4px;"></span>`;
+    }
+
     return `<tr>
       <td><strong>${d.name || d.id}</strong></td>
       <td>${d.type || 'unknown'}</td>
@@ -920,9 +965,12 @@ function renderHomeDevices() {
       <td>${d.room || '--'}</td>
       <td><span class="badge ${isOn ? 'badge-green' : 'badge-muted'}">${isOn ? 'On' : 'Off'}</span>
         ${!reachable ? '<span class="badge badge-red" style="margin-left:4px">Unreachable</span>' : ''}</td>
-      <td class="mono">${brightness}</td>
-      <td>
+      <td style="min-width:160px;">
+        ${canDim && bri != null ? `${colorDot}<input type="range" min="1" max="100" value="${bri}" style="width:80px;vertical-align:middle;" onchange="setDeviceState('${d.id}', {brightness:+this.value})" /> <span class="mono" style="font-size:.75rem;">${bri}%</span>` : '<span class="mono">--</span>'}
+      </td>
+      <td style="min-width:140px; display:flex; gap:4px; align-items:center; flex-wrap:wrap;">
         <button class="btn" style="padding:4px 10px; font-size:.75rem;" onclick="toggleDevice('${d.id}', ${!isOn})">${isOn ? 'Turn Off' : 'Turn On'}</button>
+        ${isHue && ct != null ? `<input type="range" min="153" max="500" value="${ct}" style="width:60px;" title="Color temp" onchange="setDeviceState('${d.id}', {colorTemp:+this.value})" />` : ''}
       </td>
     </tr>`;
   }).join('') : emptyRow(7, 'No devices');
@@ -941,6 +989,20 @@ async function toggleDevice(id, turnOn) {
     refreshHome();
   } else {
     showToast(`Failed to toggle ${id}`, 'error');
+  }
+}
+
+async function setDeviceState(id, stateObj) {
+  const res = await fetch(`${API}/home/devices/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(stateObj),
+  }).then(r => r.json()).catch(() => null);
+  if (res && res.status === 'success') {
+    const keys = Object.keys(stateObj).join(', ');
+    showToast(`${id}: ${keys} updated`, 'success');
+  } else {
+    showToast(`Failed to update ${id}`, 'error');
   }
 }
 
@@ -985,13 +1047,25 @@ async function refreshHome() {
 
   const adapters = status.adapters || {};
   let adapterHtml = '';
+  const adapterHints = {
+    hue: 'Hue Bridge — controls lights, rooms, scenes. Supports brightness, color temp, hue/saturation.',
+    govee: 'Govee — LAN UDP + Cloud API. Ensure GOVEE_API_KEY is set for cloud access.',
+    ifttt: 'IFTTT Webhooks — fire-and-forget triggers. Set IFTTT_WEBHOOK_KEY + IFTTT_TRIGGERS.',
+    alexa: 'Alexa — not yet implemented (stub). Use Hue or IFTTT as bridge.',
+  };
+  let connCount = 0, totalCount = 0;
   for (const [name, available] of Object.entries(adapters)) {
+    totalCount++;
+    if (available) connCount++;
     const dot = available
       ? '<span class="health-dot" style="background:var(--green)"></span>'
       : '<span class="health-dot" style="background:var(--red)"></span>';
-    adapterHtml += `<div style="margin-bottom:6px;">${dot}<strong>${name}</strong> — ${available ? 'Connected' : 'Offline'}</div>`;
+    const hint = adapterHints[name] || '';
+    adapterHtml += `<div style="margin-bottom:6px;" title="${hint}">${dot}<strong>${name}</strong> — ${available ? 'Connected' : 'Offline'}</div>`;
   }
-  document.getElementById('home-adapters').innerHTML = adapterHtml || '<div style="color:var(--text-muted)">No adapters configured</div>';
+  document.getElementById('home-adapters').innerHTML = adapterHtml
+    ? `<div style="margin-bottom:8px; font-size:.8rem; color:var(--text-muted);">${connCount}/${totalCount} adapters online</div>` + adapterHtml
+    : '<div style="color:var(--text-muted)">No adapters configured — check gateway .env</div>';
 
   document.getElementById('net-total').textContent = network.total || 0;
   document.getElementById('net-online').textContent = network.online || 0;
@@ -1068,19 +1142,24 @@ function connectSSE() {
     try {
       const evt = JSON.parse(e.data);
       const t = evt.type || '';
+      const d = evt.data || {};
       if (t.startsWith('market:')) {
-        logEvent('market', `${t}: ${evt.payload?.ticker || evt.payload?.message || ''}`);
-      } else if (t.startsWith('agent:')) {
-        logEvent('agent', `${t}: ${evt.payload?.message || ''}`);
-      } else if (t.startsWith('healer:')) {
-        logEvent('healer', `${t}: ${evt.payload?.service || evt.payload?.message || ''}`);
+        logEvent('market', `${t}: ${d.ticker || d.message || JSON.stringify(d).substring(0, 60)}`);
+      } else if (t.startsWith('agent-loop:') || t.startsWith('coding-agent:')) {
+        logEvent('agent', `${t}: ${d.message || d.status || ''}`);
+      } else if (t.startsWith('self-healer:') || t.startsWith('remediator:')) {
+        logEvent('healer', `${t}: ${d.service || d.message || ''}`);
       } else if (t.startsWith('kpi:')) {
-        logEvent('kpi', `${t}: cycle ${evt.payload?.cycleNumber || ''}`);
+        logEvent('kpi', `${t}: ${d.cycleNumber ? 'cycle ' + d.cycleNumber : d.message || ''}`);
       } else if (t.startsWith('home:')) {
-        logEvent('info', `${t}: ${evt.payload?.message || evt.payload?.total || ''}`);
+        logEvent('info', `${t}: ${d.message || d.total || JSON.stringify(d).substring(0, 60)}`);
         if (activeTab === 'home') refreshHome();
+      } else if (t.startsWith('task:') || t.startsWith('task-dispatcher:')) {
+        logEvent('info', `${t}: ${d.name || d.message || ''}`);
+      } else if (t === 'metrics') {
+        // silent — just update connection indicator
       } else {
-        logEvent('info', `${t}: ${JSON.stringify(evt.payload || {}).substring(0, 80)}`);
+        logEvent('info', `${t}: ${JSON.stringify(d).substring(0, 80)}`);
       }
     } catch {}
   };
