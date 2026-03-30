@@ -7,6 +7,7 @@ export type EventType =
   | 'mispricing_detected'
   | 'trade_executed'
   | 'trade_rejected'
+  | 'paper_trade'
   | 'settlement'
   | 'safety_triggered'
   | 'ws_connected'
@@ -56,6 +57,8 @@ export interface MispricingPayload {
   edge: number;
   kelly_fraction: number;
   recommended_contracts: number;
+  side: 'yes' | 'no';
+  action: 'buy';
 }
 
 export interface TradeExecutedPayload {
@@ -133,12 +136,14 @@ export interface MispricingSignal {
   noaaForecastF: number;
   noaaConfidence: number;
   bucketRange: [number, number];
-  marketPrice: number;
+  marketPrice: number;      // cost per contract (YES ask for YES-buy, NO ask for NO-buy)
   impliedProb: number;
   expectedValue: number;
   edge: number;
   kellyFraction: number;
   recommendedContracts: number;
+  side: 'yes' | 'no';       // which side we're buying
+  action: 'buy';            // always buy (YES-buy or NO-buy)
 }
 
 export interface SafetyCheck {
@@ -158,6 +163,8 @@ export const CITIES: CityConfig[] = [
   { name: 'Chicago', lat: 41.8781, lon: -87.6298, wfo: 'LOT', gridX: 76, gridY: 73, seriesTicker: 'KXHIGHCHI' },
   { name: 'Miami', lat: 25.7617, lon: -80.1918, wfo: 'MFL', gridX: 109, gridY: 50, seriesTicker: 'KXHIGHMIA' },
   { name: 'Dallas', lat: 32.7767, lon: -96.7970, wfo: 'FWD', gridX: 79, gridY: 108, seriesTicker: 'KXHIGHDFW' },
+  { name: 'Denver', lat: 39.7392, lon: -104.9903, wfo: 'BOU', gridX: 63, gridY: 62, seriesTicker: 'KXHIGHDEN' },
+  { name: 'Austin', lat: 30.2672, lon: -97.7431, wfo: 'EWX', gridX: 156, gridY: 91, seriesTicker: 'KXHIGHAUS' },
 ];
 
 export type KalshiRestInterfaceType = Record<string, unknown>;

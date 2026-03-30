@@ -4,28 +4,96 @@ import { DailyForecast, MispricingSignal, MispricingPayload, CITIES, CityConfig 
 import { calculatePositionSize } from './kelly.js';
 import { bucketProbability, parseBucketFromTitle, getForecastConfidence } from './weather.js';
 import { withDb } from '../storage/sqlite.js';
+import type { TickerUpdate } from './kalshi-ws.js';
 
-const EDGE_THRESHOLD = 0.10;      // 10 cents minimum edge
-const KELLY_FRACTION = 0.25;       // quarter-Kelly
-const MAX_POSITION_PCT = 0.25;     // 25% max per market
+const MONTH_MAP: Record<string, string> = {
+  JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06',
+  JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12',
+};
+
+/** Parse target date from ticker like KXHIGHNY-26MAR30-B64.5 → "2026-03-30" */
+function parseDateFromTicker(ticker: string): string | null {
+  const m = ticker.match(/-(\d{2})([A-Z]{3})(\d{2})-/);
+  if (!m) return null;
+  const month = MONTH_MAP[m[2]];
+  if (!month) return null;
+  return `20${m[1]}-${month}-${m[3].padStart(2, '0')}`;
+}
+
+const DEFAULT_EDGE_THRESHOLD = 0.03;  // 3 cents minimum edge
+const DEFAULT_KELLY_FRACTION = 0.25;  // quarter-Kelly (configurable to half-Kelly via API)
+const MAX_POSITION_PCT = 0.25;        // 25% max per market
+const NO_BUY_MAX_MODEL_PROB = 0.15;   // only sell against buckets where our model says < 15% probability
+const NO_BUY_MIN_YES_BID = 0.06;      // market YES bid must be at least 6¢ for NO trade to have meaningful edge
 
 export class MispricingDetector {
   private currentSignals: MispricingSignal[] = [];
+  private diagnosticRun = false;
+  /** Track last logged edge per ticker+side to avoid spamming duplicate events */
+  private lastLoggedEdge: Map<string, number> = new Map();
+  private readonly EDGE_CHANGE_THRESHOLD = 0.02; // only re-log if edge moved 2¢+
+  /** Configurable Kelly fraction — toggle between quarter (0.25) and half (0.50) */
+  private kellyFraction = DEFAULT_KELLY_FRACTION;
+  private edgeThreshold = DEFAULT_EDGE_THRESHOLD;
+
+  setKellyFraction(f: number): void {
+    this.kellyFraction = Math.max(0.05, Math.min(1.0, f));
+    console.log(`[mispricing] Kelly fraction set to ${this.kellyFraction}`);
+  }
+  getKellyFraction(): number { return this.kellyFraction; }
+
+  setEdgeThreshold(t: number): void {
+    this.edgeThreshold = Math.max(0.01, Math.min(0.20, t));
+    console.log(`[mispricing] Edge threshold set to $${this.edgeThreshold}`);
+  }
+  getEdgeThreshold(): number { return this.edgeThreshold; }
 
   detectAll(
     orderbook: OrderbookState,
     forecasts: Map<string, DailyForecast>,
     bankroll: number,
-    marketMeta: Map<string, { title: string; ticker: string }>
+    marketMeta: Map<string, { title: string; ticker: string }>,
+    tickerCache?: Map<string, TickerUpdate>,
   ): MispricingSignal[] {
     const signals: MispricingSignal[] = [];
+    const todayUTC = new Date().toISOString().slice(0, 10);
+
+    // One-shot diagnostic: log what the detector sees on first run with actual data
+    if (!this.diagnosticRun && marketMeta.size > 0) {
+      this.diagnosticRun = true;
+      const diag = { total: marketMeta.size, withPrice: 0, today: 0, future: 0, noDate: 0, noBucket: 0, samples: [] as string[] };
+      for (const [t, m] of marketMeta) {
+        const snap = tickerCache?.get(t);
+        const hasPrice = snap && snap.yes_ask_dollars > 0;
+        if (hasPrice) diag.withPrice++;
+        const d = parseDateFromTicker(t);
+        if (!d) diag.noDate++;
+        else if (d === todayUTC) diag.today++;
+        else diag.future++;
+        const bucket = parseBucketFromTitle(m.title);
+        if (!bucket) diag.noBucket++;
+        if (diag.samples.length < 8) {
+          diag.samples.push(`${t} date=${d} price=${hasPrice ? snap!.yes_ask_dollars : 'NONE'} bucket=${bucket ? bucket.join('-') : 'NULL'} title="${m.title.slice(0, 60)}"`);
+        }
+      }
+      console.log(`[mispricing-diag] ${JSON.stringify(diag, null, 2)}`);
+    }
 
     for (const [ticker, meta] of marketMeta) {
-      const book = orderbook.getBook(ticker);
-      if (!book) continue;
-
-      const bestAsk = book.yesAsks[0]?.price;
+      // Price: prefer live ticker channel bid/ask; fall back to orderbook depth
+      let bestAsk: number | undefined;
+      const tickerSnap = tickerCache?.get(ticker);
+      if (tickerSnap && tickerSnap.yes_ask_dollars > 0) {
+        bestAsk = Number(tickerSnap.yes_ask_dollars); // guard: coerce string→number if WS sends strings
+      } else {
+        const book = orderbook.getBook(ticker);
+        bestAsk = book?.yesAsks[0]?.price;
+      }
       if (!bestAsk || bestAsk <= 0) continue;
+
+      // Skip same-day markets — they may be in settlement and not tradeable
+      const targetDate = parseDateFromTicker(ticker);
+      if (targetDate === todayUTC) continue;
 
       const bucket = parseBucketFromTitle(meta.title);
       if (!bucket) continue;
@@ -33,11 +101,18 @@ export class MispricingDetector {
       const city = CITIES.find((c: CityConfig) => ticker.startsWith(c.seriesTicker));
       if (!city) continue;
 
+      // Match forecast by BOTH city AND target date from ticker
       let matchedForecast: DailyForecast | undefined;
       for (const [_, fc] of forecasts) {
-        if (fc.city === city.name) {
+        if (fc.city === city.name && (!targetDate || fc.targetDate === targetDate)) {
           matchedForecast = fc;
           break;
+        }
+      }
+      // Fallback: any forecast for this city if no date match
+      if (!matchedForecast) {
+        for (const [_, fc] of forecasts) {
+          if (fc.city === city.name) { matchedForecast = fc; break; }
         }
       }
       if (!matchedForecast) continue;
@@ -55,71 +130,89 @@ export class MispricingDetector {
         hoursAhead
       );
 
-      if (prob < 0.05) continue;
+      // ── YES-BUY: model probability exceeds market price ──
+      if (prob >= 0.05) {
+        const expectedValue = prob * 1.0;
+        const edge = expectedValue - bestAsk;
 
-      const expectedValue = prob * 1.0;
-      const edge = expectedValue - bestAsk;
+        if (edge >= this.edgeThreshold) {
+          const sizing = calculatePositionSize(prob, bestAsk, bankroll, this.kellyFraction, MAX_POSITION_PCT);
+          const signal: MispricingSignal = {
+            ticker, city: city.name, targetDate: matchedForecast.targetDate,
+            noaaForecastF: matchedForecast.highF, noaaConfidence: prob,
+            bucketRange: bucket, marketPrice: bestAsk, impliedProb: bestAsk,
+            expectedValue, edge, kellyFraction: sizing.kellyAdjusted,
+            recommendedContracts: sizing.contracts, side: 'yes', action: 'buy',
+          };
+          signals.push(signal);
+          this.logSignalIfNew(signal, `YES-BUY`, city.name, matchedForecast.highF, prob, bestAsk, edge, sizing.contracts);
+        }
+      }
 
-      if (edge < EDGE_THRESHOLD) continue;
+      // ── NO-BUY: model says bucket is unlikely, but market overprices YES ──
+      // Buy NO contracts on tail buckets where the market thinks probability is higher than our model
+      // Example: model says 3% chance, market YES bid = 8¢ → NO cost ≈ 92¢, EV = 97¢, edge = 5¢
+      const yesBid = tickerSnap?.yes_bid_dollars ?? 0;
+      if (prob < NO_BUY_MAX_MODEL_PROB && yesBid >= NO_BUY_MIN_YES_BID) {
+        const noPrice = 1 - yesBid;            // approximate NO ask price
+        const winProb = 1 - prob;               // probability bucket does NOT hit
+        const noEV = winProb * 1.0;
+        const noEdge = noEV - noPrice;
 
-      const sizing = calculatePositionSize(
-        prob,
-        bestAsk,
-        bankroll,
-        KELLY_FRACTION,
-        MAX_POSITION_PCT
-      );
+        if (noEdge >= this.edgeThreshold) {
+          const noSizing = calculatePositionSize(winProb, noPrice, bankroll, this.kellyFraction, MAX_POSITION_PCT);
+          const noSignal: MispricingSignal = {
+            ticker, city: city.name, targetDate: matchedForecast.targetDate,
+            noaaForecastF: matchedForecast.highF, noaaConfidence: winProb,
+            bucketRange: bucket, marketPrice: noPrice, impliedProb: 1 - yesBid,
+            expectedValue: noEV, edge: noEdge, kellyFraction: noSizing.kellyAdjusted,
+            recommendedContracts: noSizing.contracts, side: 'no', action: 'buy',
+          };
+          signals.push(noSignal);
+          this.logSignalIfNew(noSignal, `NO-BUY`, city.name, matchedForecast.highF, prob, noPrice, noEdge, noSizing.contracts);
+        }
+      }
+    }
 
-      if (sizing.contracts <= 0) continue;
+    this.currentSignals = signals;
+    return signals;
+  }
 
-      const signal: MispricingSignal = {
-        ticker,
-        city: city.name,
-        targetDate: matchedForecast.targetDate,
-        noaaForecastF: matchedForecast.highF,
-        noaaConfidence: prob,
-        bucketRange: bucket,
-        marketPrice: bestAsk,
-        impliedProb: bestAsk,
-        expectedValue,
-        edge,
-        kellyFraction: sizing.kellyAdjusted,
-        recommendedContracts: sizing.contracts,
-      };
+  private logSignalIfNew(
+    signal: MispricingSignal, label: string, cityName: string,
+    forecastF: number, prob: number, price: number, edge: number, contracts: number
+  ): void {
+    const key = `${signal.ticker}:${signal.side}`;
+    const prevEdge = this.lastLoggedEdge.get(key);
+    const isNew = prevEdge === undefined;
+    const edgeMoved = prevEdge !== undefined && Math.abs(edge - prevEdge) >= this.EDGE_CHANGE_THRESHOLD;
 
-      signals.push(signal);
+    if (isNew || edgeMoved) {
+      this.lastLoggedEdge.set(key, edge);
 
       const payload: MispricingPayload = {
-        ticker: signal.ticker,
-        city: signal.city,
-        target_date: signal.targetDate,
-        noaa_forecast_f: signal.noaaForecastF,
-        noaa_confidence: signal.noaaConfidence,
-        bucket_range: signal.bucketRange,
-        market_price: signal.marketPrice,
-        implied_prob: signal.impliedProb,
-        expected_value: signal.expectedValue,
-        edge: signal.edge,
-        kelly_fraction: signal.kellyFraction,
+        ticker: signal.ticker, city: signal.city, target_date: signal.targetDate,
+        noaa_forecast_f: signal.noaaForecastF, noaa_confidence: signal.noaaConfidence,
+        bucket_range: signal.bucketRange, market_price: signal.marketPrice,
+        implied_prob: signal.impliedProb, expected_value: signal.expectedValue,
+        edge: signal.edge, kelly_fraction: signal.kellyFraction,
         recommended_contracts: signal.recommendedContracts,
+        side: signal.side, action: signal.action,
       };
 
       withDb(async (db: Database) => {
         db.run(
           `INSERT INTO events (event_type, timestamp_ms, market_ticker, payload) VALUES (?, ?, ?, ?)`,
-          ['mispricing_detected', Date.now(), ticker, JSON.stringify(payload)]
+          ['mispricing_detected', Date.now(), signal.ticker, JSON.stringify(payload)]
         );
       }, { db: 'market-agent', persist: true });
 
       console.log(
-        `Mispricing: ${ticker} | ${city.name} | ${matchedForecast.highF}°F → ` +
-        `prob ${(prob * 100).toFixed(1)}% | price $${bestAsk.toFixed(2)} | ` +
-        `edge $${edge.toFixed(3)} | ${sizing.contracts} contracts`
+        `${label}: ${signal.ticker} | ${cityName} | ${forecastF}°F → ` +
+        `prob ${(prob * 100).toFixed(1)}% | price $${price.toFixed(2)} | ` +
+        `edge $${edge.toFixed(3)} | ${contracts} contracts`
       );
     }
-
-    this.currentSignals = signals;
-    return signals;
   }
 
   getCurrentSignals(): MispricingSignal[] {

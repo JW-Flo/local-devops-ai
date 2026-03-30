@@ -9,15 +9,10 @@ import { MispricingDetector } from './mispricing.js';
 import { SafetyGuard } from './safety.js';
 import { OrderExecutor } from './orders.js';
 import { initNotifications, notify } from './notifications.js';
-import { DailyForecast } from './types.js';
+import { DailyForecast, MispricingSignal } from './types.js';
 
-const CITIES = [
-  { name: 'NYC', lat: 40.7831, lon: -73.9712, wfo: 'OKX', gridX: 33, gridY: 37, seriesTicker: 'KXHIGHNY' },
-  { name: 'LA', lat: 34.0522, lon: -118.2437, wfo: 'LOX', gridX: 154, gridY: 44, seriesTicker: 'KXHIGHLAX' },
-  { name: 'Chicago', lat: 41.8781, lon: -87.6298, wfo: 'LOT', gridX: 76, gridY: 73, seriesTicker: 'KXHIGHCHI' },
-  { name: 'Miami', lat: 25.7617, lon: -80.1918, wfo: 'MFL', gridX: 109, gridY: 50, seriesTicker: 'KXHIGHMIA' },
-  { name: 'Dallas', lat: 32.7767, lon: -96.7970, wfo: 'FWD', gridX: 79, gridY: 108, seriesTicker: 'KXHIGHDFW' },
-];
+// CITIES now imported from types.ts — single source of truth
+// Remove this local duplicate
 
 export class MarketAgent {
   private noaa: NOAAClient;
@@ -30,14 +25,20 @@ export class MarketAgent {
   private bankroll = 0;
   private marketMeta: Map<string, { title: string; ticker: string }> = new Map();
   private running = false;
+  private authenticated = false;
+  private lastError: string | null = null;
+  private errors: string[] = [];
+  private lastScanTime = 0;
+  private warmedUp = false;
+  private readonly SCAN_COOLDOWN_MS = 30_000; // throttle orderbook-triggered scans
 
-  constructor() {
+  constructor(paperMode = true) {
     this.noaa = new NOAAClient();
     this.kalshiRest = new KalshiRest();
     this.feed = new KalshiFeed(this.kalshiRest);
     this.detector = new MispricingDetector();
     this.safety = new SafetyGuard();
-    this.executor = new OrderExecutor(this.kalshiRest, this.safety);
+    this.executor = new OrderExecutor(this.kalshiRest, this.safety, paperMode);
   }
 
   async start(): Promise<void> {
@@ -63,6 +64,7 @@ export class MarketAgent {
     }, { db: 'market-agent', persist: true });
 
     initNotifications(config.discordWebhookUrl || '');
+    await this.executor.init();
 
     await withDb(async (db: Database) => {
       db.run(
@@ -73,9 +75,23 @@ export class MarketAgent {
 
     try {
       this.bankroll = await this.kalshiRest.getBalance();
+      this.authenticated = true;
+      this.lastError = null;
       console.log(`Initial balance: $${this.bankroll.toFixed(2)}`);
+
+      // Sync existing positions so safety guard and dedup survive restarts
+      await this.syncPositionsFromKalshi();
     } catch (err) {
-      console.error('Failed to fetch balance:', err);
+      const msg = (err as Error).message;
+      this.authenticated = false;
+      this.lastError = `Kalshi auth failed: ${msg}`;
+      this.errors.push(this.lastError);
+      console.error(`[market-agent] ${this.lastError}`);
+      // Still start NOAA pipeline so forecasts flow, but skip Kalshi feed
+      console.warn('[market-agent] Running in NOAA-only mode (no Kalshi connection)');
+      await this.pollNOAA();
+      this.noaaTimer = setInterval(() => this.pollNOAA(), 30 * 60 * 1000);
+      return; // Don't start WS feed or market refresh without auth
     }
 
     await this.feed.start();
@@ -84,11 +100,20 @@ export class MarketAgent {
       this.onOrderbookUpdate(ticker);
     });
 
+    // Refresh market meta FIRST so runFullScan has tickers to work with
+    await this.refreshMarketMeta();
+    setInterval(() => this.refreshMarketMeta(), 15 * 60 * 1000);
+
     await this.pollNOAA();
     this.noaaTimer = setInterval(() => this.pollNOAA(), 30 * 60 * 1000);
 
-    await this.refreshMarketMeta();
-    setInterval(() => this.refreshMarketMeta(), 15 * 60 * 1000);
+    // Allow 30s for WS ticker data to warm the cache before first scan
+    setTimeout(() => {
+      this.warmedUp = true;
+      const tickerCount = this.feed.getTickerSnapshot().size;
+      console.log(`[market-agent] Ticker warmup complete (${tickerCount} prices cached), running initial scan`);
+      this.runFullScan();
+    }, 30_000);
 
     await notify(`Bot started | Bankroll: $${this.bankroll.toFixed(2)}`);
   }
@@ -114,9 +139,32 @@ export class MarketAgent {
   private async pollNOAA(): Promise<void> {
     try {
       await this.noaa.pollAll();
-      this.runFullScan();
+      if (this.warmedUp) this.runFullScan();
     } catch (err) {
       console.error('NOAA poll failed:', err);
+    }
+  }
+
+  private async syncPositionsFromKalshi(): Promise<void> {
+    try {
+      const positions = await this.kalshiRest.getPositions();
+      let synced = 0;
+      for (const pos of positions) {
+        if (pos.position > 0 && pos.ticker.startsWith('KXHIGH')) {
+          // Reconstruct approximate avg price from exposure
+          const avgPrice = pos.market_exposure > 0
+            ? pos.market_exposure / pos.position / 100
+            : 0.10; // fallback estimate
+          this.safety.recordTrade(pos.ticker, pos.position, avgPrice);
+          this.executor.markAsExecuted(pos.ticker);
+          synced++;
+        }
+      }
+      if (synced > 0) {
+        console.log(`[market-agent] Synced ${synced} existing positions from Kalshi`);
+      }
+    } catch (err) {
+      console.warn('[market-agent] Position sync failed:', (err as Error).message);
     }
   }
 
@@ -133,25 +181,57 @@ export class MarketAgent {
   }
 
   private onOrderbookUpdate(ticker: string): void {
+    if (!this.warmedUp) return;
     if (!ticker.startsWith('KXHIGH')) return;
     const forecasts = this.noaa.getLatestForecasts();
     if (forecasts.size === 0) return;
+    // Throttle: orderbook deltas can arrive hundreds/sec — cap to once per 30s
+    const now = Date.now();
+    if (now - this.lastScanTime < this.SCAN_COOLDOWN_MS) return;
     this.runFullScan();
   }
 
   private runFullScan(): void {
     if (this.safety.isKilled()) return;
     if (this.bankroll <= 0) return;
+    if (this.marketMeta.size === 0) return; // no markets yet — don't poison cooldown
 
     const forecasts = this.noaa.getLatestForecasts();
     const orderbook = this.feed.getOrderbook();
+    const tickerCache = this.feed.getTickerSnapshot();
 
-    const signals = this.detector.detectAll(orderbook, forecasts, this.bankroll, this.marketMeta);
+    // Don't poison the cooldown if we have no price data yet (WS still warming up)
+    if (tickerCache.size === 0) return;
+    this.lastScanTime = Date.now();
 
-    for (const signal of signals) {
-      this.executor.execute(signal, this.bankroll).catch((err) => {
+    const signals = this.detector.detectAll(orderbook, forecasts, this.bankroll, this.marketMeta, tickerCache);
+
+    // Execute sequentially — prevents race conditions where multiple signals
+    // pass safety checks before any trade is recorded
+    this.executeSignalsSequentially(signals).catch((err) => {
+      console.error('[market-agent] Sequential execution error:', err);
+    });
+  }
+
+  private async executeSignalsSequentially(signals: MispricingSignal[]): Promise<void> {
+    const tradeable = signals.filter(s => s.recommendedContracts > 0);
+    if (tradeable.length === 0) return;
+
+    for (const signal of tradeable) {
+      try {
+        const traded = await this.executor.execute(signal, this.bankroll);
+        if (traded) {
+          // Refresh bankroll from Kalshi after each successful trade
+          try {
+            this.bankroll = await this.kalshiRest.getBalance();
+          } catch (err) {
+            console.warn('[market-agent] Balance refresh failed, using estimate');
+            this.bankroll -= signal.recommendedContracts * signal.marketPrice;
+          }
+        }
+      } catch (err) {
         console.error(`Trade execution failed for ${signal.ticker}:`, err);
-      });
+      }
     }
   }
 
@@ -160,14 +240,33 @@ export class MarketAgent {
   }
 
   getStatus() {
+    const signals = this.detector.getCurrentSignals();
+    const yesBuySignals = signals.filter(s => s.side === 'yes');
+    const noBuySignals = signals.filter(s => s.side === 'no');
     return {
       running: this.running,
+      authenticated: this.authenticated,
+      paperMode: this.executor.paperMode,
       bankroll: this.bankroll,
       safety: this.safety.getStatus(),
-      marketCount: this.feed.getMarketTickers().length,
-      wsConnected: this.feed.isWebSocketConnected(),
-      signals: this.detector.getCurrentSignals().length,
+      marketCount: this.authenticated ? this.feed.getMarketTickers().length : 0,
+      wsConnected: this.authenticated ? this.feed.isWebSocketConnected() : false,
+      signals: signals.length,
+      signalBreakdown: { yesBuy: yesBuySignals.length, noBuy: noBuySignals.length },
+      kellyFraction: this.detector.getKellyFraction(),
+      edgeThreshold: this.detector.getEdgeThreshold(),
+      lastError: this.lastError,
+      errors: this.errors.slice(-10),
+      performance: this.executor.getPerformance().getStats(),
     };
+  }
+
+  setPaperMode(enabled: boolean): void {
+    this.executor.paperMode = enabled;
+  }
+
+  getPerformanceStats() {
+    return this.executor.getPerformance().getStats();
   }
 
   getCurrentSignals() {
@@ -180,6 +279,22 @@ export class MarketAgent {
 
   getForecasts(): DailyForecast[] {
     return Array.from(this.noaa.getLatestForecasts().values());
+  }
+
+  setKellyFraction(f: number): void {
+    this.detector.setKellyFraction(f);
+  }
+
+  getKellyFraction(): number {
+    return this.detector.getKellyFraction();
+  }
+
+  setEdgeThreshold(t: number): void {
+    this.detector.setEdgeThreshold(t);
+  }
+
+  getEdgeThreshold(): number {
+    return this.detector.getEdgeThreshold();
   }
 
   killSwitch(): void {
@@ -281,6 +396,52 @@ export function createMarketAgentRouter(): Router {
     res.json({ forecasts: agentInstance.getForecasts() });
   });
 
+  router.get('/events', async (req: Request, res: Response) => {
+    try {
+      const limit = Math.min(Number(req.query.limit) || 100, 500);
+      const type = req.query.type as string | undefined;
+
+      const rows = await withDb(async (db: Database) => {
+        const where = type ? 'WHERE event_type = ?' : '';
+        const params = type ? [type, limit] : [limit];
+        const stmt = db.prepare(
+          `SELECT id, event_type, timestamp_ms, market_ticker, payload, created_at
+           FROM events ${where}
+           ORDER BY timestamp_ms DESC LIMIT ?`
+        );
+        stmt.bind(params);
+        const results: any[] = [];
+        while (stmt.step()) {
+          const row = stmt.getAsObject();
+          results.push({
+            ...row,
+            payload: row.payload ? JSON.parse(row.payload as string) : null,
+          });
+        }
+        stmt.free();
+        return results;
+      }, { db: 'market-agent' });
+
+      // Also fetch summary counts
+      const summary = await withDb(async (db: Database) => {
+        const stmt = db.prepare(
+          `SELECT event_type, COUNT(*) as count FROM events GROUP BY event_type ORDER BY count DESC`
+        );
+        const results: Record<string, number> = {};
+        while (stmt.step()) {
+          const row = stmt.getAsObject();
+          results[row.event_type as string] = row.count as number;
+        }
+        stmt.free();
+        return results;
+      }, { db: 'market-agent' });
+
+      res.json({ events: rows, summary, total: rows.length });
+    } catch (err) {
+      res.status(500).json({ status: 'error', message: (err as Error).message });
+    }
+  });
+
   router.post('/kill', requireAuth, (req: Request, res: Response) => {
     if (!agentInstance) {
       res.status(400).json({ status: 'error', message: 'Agent not running' });
@@ -297,6 +458,61 @@ export function createMarketAgentRouter(): Router {
     }
     agentInstance.resetSafety();
     res.json({ status: 'reset' });
+  });
+
+  router.post('/paper', requireAuth, (req: Request, res: Response) => {
+    if (!agentInstance) {
+      res.status(400).json({ status: 'error', message: 'Agent not running' });
+      return;
+    }
+    const enabled = req.body?.enabled !== false; // default true
+    agentInstance.setPaperMode(enabled);
+    res.json({ status: 'ok', paperMode: enabled });
+  });
+
+  router.post('/kelly', requireAuth, (req: Request, res: Response) => {
+    if (!agentInstance) {
+      res.status(400).json({ status: 'error', message: 'Agent not running' });
+      return;
+    }
+    const fraction = Number(req.body?.fraction);
+    if (!fraction || fraction < 0.05 || fraction > 1.0) {
+      res.status(400).json({ status: 'error', message: 'fraction must be 0.05-1.0 (0.25=quarter, 0.50=half)' });
+      return;
+    }
+    agentInstance.setKellyFraction(fraction);
+    res.json({ status: 'ok', kellyFraction: fraction });
+  });
+
+  router.post('/edge-threshold', requireAuth, (req: Request, res: Response) => {
+    if (!agentInstance) {
+      res.status(400).json({ status: 'error', message: 'Agent not running' });
+      return;
+    }
+    const threshold = Number(req.body?.threshold);
+    if (!threshold || threshold < 0.01 || threshold > 0.20) {
+      res.status(400).json({ status: 'error', message: 'threshold must be 0.01-0.20' });
+      return;
+    }
+    agentInstance.setEdgeThreshold(threshold);
+    res.json({ status: 'ok', edgeThreshold: threshold });
+  });
+
+  router.post('/live', requireAuth, (req: Request, res: Response) => {
+    if (!agentInstance) {
+      res.status(400).json({ status: 'error', message: 'Agent not running' });
+      return;
+    }
+    agentInstance.setPaperMode(false);
+    res.json({ status: 'ok', paperMode: false, warning: 'LIVE TRADING ENABLED — real money at risk' });
+  });
+
+  router.get('/performance', (req: Request, res: Response) => {
+    if (!agentInstance) {
+      res.json({ trades: 0, message: 'Agent not running' });
+      return;
+    }
+    res.json(agentInstance.getPerformanceStats());
   });
 
   return router;
