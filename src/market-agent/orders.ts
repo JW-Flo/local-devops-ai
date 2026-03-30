@@ -5,21 +5,54 @@ import { MispricingSignal, TradeValidation, TradeExecutedPayload } from './types
 import { validateWithHaiku } from './ensemble.js';
 import { notify } from './notifications.js';
 import { withDb } from '../storage/sqlite.js';
+import { PerformanceTracker } from './performance.js';
 
 export class OrderExecutor {
   private rest: KalshiRest;
   private safety: SafetyGuard;
   private pendingOrders: Set<string> = new Set();
+  private executedTickers: Map<string, number> = new Map(); // ticker -> timestamp
+  private validationCache: Map<string, TradeValidation> = new Map(); // ticker -> cached result
+  private performance: PerformanceTracker;
+  private _paperMode: boolean;
 
-  constructor(rest: KalshiRest, safety: SafetyGuard) {
+  constructor(rest: KalshiRest, safety: SafetyGuard, paperMode = true) {
     this.rest = rest;
     this.safety = safety;
+    this._paperMode = paperMode;
+    this.performance = new PerformanceTracker();
+  }
+
+  get paperMode(): boolean { return this._paperMode; }
+  set paperMode(v: boolean) {
+    this._paperMode = v;
+    console.log(`[orders] Trading mode: ${v ? 'PAPER' : 'LIVE'}`);
+  }
+
+  getPerformance(): PerformanceTracker { return this.performance; }
+
+  async init(): Promise<void> {
+    await this.performance.initialize();
+  }
+
+  /** Clear executed ticker history (call on bot restart or new trading day) */
+  resetExecutedTickers(): void {
+    this.executedTickers.clear();
+  }
+
+  /** Mark a ticker as already executed (used when syncing positions on startup) */
+  markAsExecuted(ticker: string): void {
+    this.executedTickers.set(ticker, Date.now());
   }
 
   async execute(signal: MispricingSignal, bankroll: number): Promise<boolean> {
     if (this.pendingOrders.has(signal.ticker)) {
       console.log(`Order already pending for ${signal.ticker}`);
       return false;
+    }
+
+    if (this.executedTickers.has(signal.ticker)) {
+      return false; // silently skip — already traded or rejected this ticker this session
     }
 
     const safetyCheck = this.safety.checkPreTrade(signal, bankroll);
@@ -39,81 +72,135 @@ export class OrderExecutor {
       return false;
     }
 
+    // In paper mode, skip Haiku validation — auto-approve so paper trades flow
+    // Haiku still validates in live mode where real money is at risk
     let validation: TradeValidation;
-    try {
-      validation = await validateWithHaiku(signal);
-    } catch (err) {
-      console.error(`Haiku validation error for ${signal.ticker}:`, err);
-      return false;
-    }
+    if (this._paperMode) {
+      validation = { approved: true, confidence: 0, reasoning: 'Paper mode — Haiku bypassed' };
+    } else {
+      // Use cached validation if available — Haiku with temp=0 is deterministic for same inputs
+      const cached = this.validationCache.get(signal.ticker);
+      if (cached) {
+        validation = cached;
+      } else {
+        try {
+          validation = await validateWithHaiku(signal);
+          this.validationCache.set(signal.ticker, validation);
+        } catch (err) {
+          console.error(`Haiku validation error for ${signal.ticker}:`, err);
+          return false;
+        }
+      }
 
-    if (!validation.approved) {
-      console.log(`Trade rejected by Haiku for ${signal.ticker}: ${validation.reasoning}`);
-      await withDb(async (db: Database) => {
-        db.run(
-          `INSERT INTO events (event_type, timestamp_ms, market_ticker, payload) VALUES (?, ?, ?, ?)`,
-          [
-            'trade_rejected',
-            Date.now(),
-            signal.ticker,
-            JSON.stringify({
-              reason: `Haiku rejected: ${validation.reasoning}`,
-              signal,
-              validation,
-            }),
-          ]
-        );
-      }, { db: 'market-agent', persist: true });
-      return false;
+      if (!validation.approved) {
+        console.log(`Trade rejected by Haiku for ${signal.ticker}: ${validation.reasoning}`);
+        this.executedTickers.set(signal.ticker, Date.now()); // Don't re-evaluate rejected tickers
+        await withDb(async (db: Database) => {
+          db.run(
+            `INSERT INTO events (event_type, timestamp_ms, market_ticker, payload) VALUES (?, ?, ?, ?)`,
+            [
+              'trade_rejected',
+              Date.now(),
+              signal.ticker,
+              JSON.stringify({
+                reason: `Haiku rejected: ${validation.reasoning}`,
+                signal,
+                validation,
+              }),
+            ]
+          );
+        }, { db: 'market-agent', persist: true });
+        return false;
+      }
     }
 
     this.pendingOrders.add(signal.ticker);
     try {
-      const order = await this.rest.createOrder({
-        ticker: signal.ticker,
-        side: 'yes',
-        type: 'limit',
-        action: 'buy',
-        count: signal.recommendedContracts,
-        yes_price: Math.round(signal.marketPrice * 100),
-      });
+      let orderId: string;
+      let filledCount: number;
 
-      this.safety.recordTrade(signal.ticker, signal.recommendedContracts, signal.marketPrice);
+      const tradeSide = signal.side || 'yes';
+      const tradeAction = signal.action || 'buy';
 
+      if (this._paperMode) {
+        // Paper trade: simulate fill at current market price
+        orderId = `paper-${Date.now()}-${signal.ticker}-${tradeSide}`;
+        filledCount = signal.recommendedContracts;
+        console.log(`[PAPER] Simulated ${tradeSide.toUpperCase()}-${tradeAction.toUpperCase()}: ${orderId} | ${signal.ticker} | ${filledCount}@$${signal.marketPrice.toFixed(2)}`);
+      } else {
+        // Live trade: place real order on Kalshi
+        const orderReq: any = {
+          ticker: signal.ticker,
+          side: tradeSide,
+          type: 'limit',
+          action: tradeAction,
+          count: signal.recommendedContracts,
+        };
+        // Kalshi API: yes_price for YES orders, no_price for NO orders (in cents)
+        if (tradeSide === 'yes') {
+          orderReq.yes_price = Math.round(signal.marketPrice * 100);
+        } else {
+          orderReq.no_price = Math.round(signal.marketPrice * 100);
+        }
+        const order = await this.rest.createOrder(orderReq);
+        orderId = order.order_id;
+
+        // Check fill status — Kalshi limit orders may partially fill
+        filledCount = order.status === 'executed'
+          ? signal.recommendedContracts
+          : (order as any).remaining_count !== undefined
+            ? signal.recommendedContracts - (order as any).remaining_count
+            : signal.recommendedContracts;
+
+        if (filledCount <= 0) {
+          console.warn(`Order ${orderId} for ${signal.ticker} is resting (unfilled) — cancelling`);
+          try { await this.rest.cancelOrder(orderId); } catch {}
+          return false;
+        }
+      }
+
+      this.safety.recordTrade(signal.ticker, filledCount, signal.marketPrice);
+      this.executedTickers.set(signal.ticker, Date.now());
+
+      // Record in performance tracker
+      await this.performance.recordTrade(
+        signal, signal.marketPrice, validation.approved, validation.confidence, this._paperMode
+      );
+
+      const modeTag = this._paperMode ? '[PAPER] ' : '';
       const payload: TradeExecutedPayload = {
-        order_id: order.order_id,
+        order_id: orderId,
         ticker: signal.ticker,
-        side: 'buy',
-        quantity: signal.recommendedContracts,
+        side: tradeSide as 'buy' | 'sell',
+        quantity: filledCount,
         price: signal.marketPrice,
-        total_cost: signal.recommendedContracts * signal.marketPrice,
-        rationale: `NOAA ${signal.noaaForecastF}°F, prob ${(signal.noaaConfidence * 100).toFixed(1)}%, ` +
+        total_cost: filledCount * signal.marketPrice,
+        rationale: `${modeTag}${tradeSide.toUpperCase()}-BUY | NOAA ${signal.noaaForecastF}°F, prob ${(signal.noaaConfidence * 100).toFixed(1)}%, ` +
           `edge $${signal.edge.toFixed(3)}, Kelly ${signal.kellyFraction.toFixed(3)}`,
       };
 
       await withDb(async (db: Database) => {
         db.run(
           `INSERT INTO events (event_type, timestamp_ms, market_ticker, payload) VALUES (?, ?, ?, ?)`,
-          ['trade_executed', Date.now(), signal.ticker, JSON.stringify(payload)]
+          [this._paperMode ? 'paper_trade' : 'trade_executed', Date.now(), signal.ticker, JSON.stringify(payload)]
         );
       }, { db: 'market-agent', persist: true });
 
       await notify(
-        `Trade: ${signal.ticker}\n` +
-        `${signal.recommendedContracts} contracts @ $${signal.marketPrice.toFixed(2)}\n` +
+        `${modeTag}${tradeSide.toUpperCase()}-BUY: ${signal.ticker}\n` +
+        `${filledCount} contracts @ $${signal.marketPrice.toFixed(2)}\n` +
         `NOAA: ${signal.noaaForecastF}°F → bucket [${signal.bucketRange[0]},${signal.bucketRange[1]}]\n` +
         `Edge: $${signal.edge.toFixed(3)} | Kelly: ${(signal.kellyFraction * 100).toFixed(1)}%`
       );
 
       console.log(
-        `Trade executed: ${order.order_id} | ${signal.ticker} | ` +
-        `${signal.recommendedContracts}@$${signal.marketPrice.toFixed(2)}`
+        `${modeTag}Trade executed: ${orderId} | ${signal.ticker} | ` +
+        `${filledCount}@$${signal.marketPrice.toFixed(2)}`
       );
 
       return true;
     } catch (err) {
       console.error(`Order placement failed for ${signal.ticker}:`, err);
-      console.error(`Order failed for ${signal.ticker}:`, err);
       await notify(`Order FAILED: ${signal.ticker} — execution error`, 'error');
       return false;
     } finally {

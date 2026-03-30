@@ -35,11 +35,11 @@ export class SafetyGuard {
 
     const activeCities = new Set<string>();
     for (const [ticker] of this.positions) {
-      const cityMatch = ticker.match(/^KXHIGH(NY|LAX|CHI|MIA|DFW)/);
+      const cityMatch = ticker.match(/^KXHIGH(NY|LAX|CHI|MIA|DFW|DEN|AUS)/);
       if (cityMatch) activeCities.add(cityMatch[1]);
     }
-    const signalCity = signal.ticker.match(/^KXHIGH(NY|LAX|CHI|MIA|DFW)/)?.[1];
-    if (signalCity && !activeCities.has(signalCity) && activeCities.size >= 2) {
+    const signalCity = signal.ticker.match(/^KXHIGH(NY|LAX|CHI|MIA|DFW|DEN|AUS)/)?.[1];
+    if (signalCity && !activeCities.has(signalCity) && activeCities.size >= 4) {
       return { passed: false, reason: `Correlation limit: already exposed to ${activeCities.size} cities` };
     }
 
@@ -112,7 +112,7 @@ export class SafetyGuard {
   } {
     const activeCities = new Set<string>();
     for (const [ticker] of this.positions) {
-      const m = ticker.match(/^KXHIGH(NY|LAX|CHI|MIA|DFW)/);
+      const m = ticker.match(/^KXHIGH(NY|LAX|CHI|MIA|DFW|DEN|AUS)/);
       if (m) activeCities.add(m[1]);
     }
 
