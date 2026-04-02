@@ -230,10 +230,11 @@ export class KalshiRest {
   }
 
   async getOrderbook(ticker: string): Promise<{ yes: Array<{ price: number; quantity: number }>; no: Array<{ price: number; quantity: number }> }> {
-    const data = await this.request<{ orderbook: { yes: Array<[number, number]>; no: Array<[number, number]> } }>('GET', `/markets/${ticker}/orderbook`);
+    const data = await this.request<{ orderbook_fp: { yes_dollars: Array<[string, string]>; no_dollars: Array<[string, string]> } }>('GET', `/markets/${ticker}/orderbook`);
+    const ob = data.orderbook_fp || { yes_dollars: [], no_dollars: [] };
     return {
-      yes: (data.orderbook.yes || []).map(([price, quantity]) => ({ price: price / 100, quantity })),
-      no: (data.orderbook.no || []).map(([price, quantity]) => ({ price: price / 100, quantity })),
+      yes: (ob.yes_dollars || []).map(([price, qty]) => ({ price: Number(price), quantity: Number(qty) })),
+      no: (ob.no_dollars || []).map(([price, qty]) => ({ price: Number(price), quantity: Number(qty) })),
     };
   }
 

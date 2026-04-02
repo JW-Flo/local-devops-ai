@@ -84,22 +84,34 @@ export class MispricingDetector {
     for (const [ticker, meta] of marketMeta) {
       // Price: prefer live ticker channel bid/ask; fall back to orderbook depth
       let bestAsk: number | undefined;
+      let askSize = 0;
+      let bidSize = 0;
       const tickerSnap = tickerCache?.get(ticker);
       if (tickerSnap && tickerSnap.yes_ask_dollars > 0) {
-        bestAsk = Number(tickerSnap.yes_ask_dollars); // guard: coerce string→number if WS sends strings
+        bestAsk = Number(tickerSnap.yes_ask_dollars);
+        askSize = Number(tickerSnap.yes_ask_size || 0);
+        bidSize = Number(tickerSnap.yes_bid_size || 0);
       } else {
         const book = orderbook.getBook(ticker);
-        bestAsk = book?.yesAsks[0]?.price;
+        if (book?.yesAsks[0]) {
+          bestAsk = book.yesAsks[0].price;
+          askSize = book.yesAsks[0].size || 0;
+        }
+        if (book?.yesBids[0]) {
+          bidSize = book.yesBids[0].size || 0;
+        }
       }
       if (!bestAsk || bestAsk <= 0) continue;
 
       // ── Liquidity filter: skip illiquid markets ──
-      const askSize = tickerSnap ? Number(tickerSnap.yes_ask_size || 0) : 0;
       if (askSize < MIN_ASK_SIZE) continue; // not enough depth to trade
 
-      // Skip same-day markets — they may be in settlement and not tradeable
+      // Skip same-day markets only after 22:00 UTC (6 PM ET) — daily high is locked in by then
       const targetDate = parseDateFromTicker(ticker);
-      if (targetDate === todayUTC) continue;
+      if (targetDate === todayUTC) {
+        const hourUTC = new Date().getUTCHours();
+        if (hourUTC >= 22) continue;
+      }
 
       const bucket = parseBucketFromTitle(meta.title);
       if (!bucket) continue;
@@ -168,7 +180,12 @@ export class MispricingDetector {
       // ── NO-BUY: model says bucket is unlikely, but market overprices YES ──
       // Buy NO contracts on tail buckets where the market thinks probability is higher than our model
       // Example: model says 3% chance, market YES bid = 8¢ → NO cost ≈ 92¢, EV = 97¢, edge = 5¢
-      const yesBid = tickerSnap?.yes_bid_dollars ?? 0;
+      // YES bid price for NO-BUY calculation: prefer WS, fall back to orderbook
+      let yesBid = tickerSnap?.yes_bid_dollars ?? 0;
+      if (!yesBid) {
+        const book = orderbook.getBook(ticker);
+        yesBid = book?.yesBids[0]?.price ?? 0;
+      }
       if (prob < NO_BUY_MAX_MODEL_PROB && yesBid >= NO_BUY_MIN_YES_BID) {
         const noPrice = 1 - yesBid;            // approximate NO ask price
         const winProb = 1 - prob;               // probability bucket does NOT hit
@@ -176,10 +193,9 @@ export class MispricingDetector {
         const noEdge = noEV - noPrice;
 
         if (noEdge >= effectiveEdgeThreshold) {
-          const noBidSize = tickerSnap ? Number(tickerSnap.yes_bid_size || 0) : 0;
-          if (noBidSize < MIN_ASK_SIZE) continue; // not enough liquidity on bid side for NO trade
+          if (bidSize < MIN_ASK_SIZE) continue; // not enough liquidity on bid side for NO trade
           const noSizing = calculatePositionSize(winProb, noPrice, bankroll, this.kellyFraction, MAX_POSITION_PCT);
-          const noCappedContracts = Math.min(noSizing.contracts, noBidSize);
+          const noCappedContracts = Math.min(noSizing.contracts, bidSize);
           if (noCappedContracts <= 0) continue;
           const noSignal: MispricingSignal = {
             ticker, city: city.name, targetDate: matchedForecast.targetDate,
