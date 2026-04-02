@@ -221,7 +221,7 @@ export class KalshiRest {
    */
   async getMarket(ticker: string): Promise<{ ticker: string; status: string; result: string | null; title: string } | null> {
     try {
-      const data = await this.request<{ market: { ticker: string; status: string; result: string; title: string } }>('GET', `\`/markets/\${ticker}\``);
+      const data = await this.request<{ market: { ticker: string; status: string; result: string; title: string } }>('GET', `/markets/${ticker}`);
       return data.market;
     } catch (err) {
       console.warn(`[kalshi-rest] getMarket(${ticker}) failed: ${(err as Error).message}`);
