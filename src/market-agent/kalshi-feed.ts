@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import type { Database } from 'sql.js';
-import { KalshiWebSocket, OrderbookDelta, TradeTick } from './kalshi-ws.js';
+import { KalshiWebSocket, OrderbookDelta, TradeTick, TickerUpdate } from './kalshi-ws.js';
 import { KalshiRest } from './kalshi-rest.js';
 import { OrderbookState } from './orderbook.js';
 import { config } from '../config.js';
@@ -16,12 +16,14 @@ export class KalshiFeed extends EventEmitter {
   private restFallbackTimer: NodeJS.Timeout | null = null;
   private reconcileTimer: NodeJS.Timeout | null = null;
   private marketTickers: string[] = [];
+  /** Latest ticker bid/ask from WS ticker channel — dollars, updated in real-time */
+  private tickerCache: Map<string, TickerUpdate> = new Map();
 
   constructor(rest: KalshiRest) {
     super();
     this.rest = rest;
     this.orderbook = new OrderbookState();
-    this.ws = new KalshiWebSocket(() => rest.getToken());
+    this.ws = new KalshiWebSocket(() => rest.getWsAuthHeaders());
   }
 
   getOrderbook(): OrderbookState {
@@ -66,6 +68,11 @@ export class KalshiFeed extends EventEmitter {
 
     this.ws.on('fill', (fill: Record<string, unknown>) => {
       this.emit('fill', fill);
+    });
+
+    this.ws.on('ticker_update', (update: TickerUpdate) => {
+      this.tickerCache.set(update.market_ticker, update);
+      this.emit('ticker_update', update);
     });
 
     await this.ws.connect();
@@ -176,6 +183,16 @@ export class KalshiFeed extends EventEmitter {
 
   getMarketTickers(): string[] {
     return [...this.marketTickers];
+  }
+
+  /** Latest real-time bid/ask from ticker channel, keyed by market ticker */
+  getTickerSnapshot(): Map<string, TickerUpdate> {
+    return this.tickerCache;
+  }
+
+  /** Get bid/ask for a specific ticker (undefined if no data yet) */
+  getTickerBidAsk(ticker: string): TickerUpdate | undefined {
+    return this.tickerCache.get(ticker);
   }
 
   isWebSocketConnected(): boolean {

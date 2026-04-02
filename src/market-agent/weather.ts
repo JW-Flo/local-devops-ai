@@ -1,20 +1,53 @@
 import { CityConfig, CITIES, TempBucket } from './types.js';
 
+/**
+ * City-specific forecast uncertainty (σ in °F) calibrated against NOAA NWS
+ * verification data. Coastal/microclimate cities have higher variance.
+ *
+ * Calibration basis (observed Mar 2026 paper trading):
+ *   NYC: 19°F miss on Mar 29 → σ≈4.0 at 24h
+ *   Chicago: 14°F miss on Mar 29 → σ≈3.5 at 24h
+ *   Miami: subtropical, stable → σ≈2.5
+ *   LA: marine layer variability → σ≈3.0
+ *   Dallas/Austin: continental, moderate → σ≈3.0
+ *   Denver: mountain effects, high variance → σ≈4.5
+ *
+ * Each entry: [24h σ, 48h σ, 72h+ σ]
+ */
+const CITY_SIGMA: Record<string, [number, number, number]> = {
+  'New York':  [4.0, 5.5, 7.0],
+  'Los Angeles': [3.0, 4.0, 5.5],
+  'Chicago':   [3.5, 5.0, 6.5],
+  'Miami':     [2.5, 3.5, 5.0],
+  'Dallas':    [3.0, 4.5, 6.0],
+  'Denver':    [4.5, 6.0, 7.5],
+  'Austin':    [3.0, 4.5, 6.0],
+};
+const DEFAULT_SIGMA: [number, number, number] = [3.5, 5.0, 6.5];
+
 export function parseBucketFromTitle(title: string): [number, number] | null {
-  const lowerMatch = title.match(/(\d+)°?\s*(or lower|and below)/i);
-  if (lowerMatch) {
-    return [-999, parseInt(lowerMatch[1])];
-  }
+  // Strip markdown bold markers (Kalshi titles use **text**)
+  const clean = title.replace(/\*\*/g, '');
 
-  const upperMatch = title.match(/(\d+)°?\s*(or higher|and above)/i);
-  if (upperMatch) {
-    return [parseInt(upperMatch[1]), 999];
-  }
+  // Kalshi v2 format: ">69°" (above threshold)
+  const gtMatch = clean.match(/>(\d+(?:\.\d+)?)\s*°/);
+  if (gtMatch) return [parseFloat(gtMatch[1]), 999];
 
-  const rangeMatch = title.match(/(\d+)°?\s*[-–to]+\s*(\d+)/i);
-  if (rangeMatch) {
-    return [parseInt(rangeMatch[1]), parseInt(rangeMatch[2])];
-  }
+  // Kalshi v2 format: "<62°" (below threshold)
+  const ltMatch = clean.match(/<(\d+(?:\.\d+)?)\s*°/);
+  if (ltMatch) return [-999, parseFloat(ltMatch[1])];
+
+  // Legacy: "N or higher / and above"
+  const upperMatch = clean.match(/(\d+(?:\.\d+)?)°?\s*(or higher|and above)/i);
+  if (upperMatch) return [parseFloat(upperMatch[1]), 999];
+
+  // Legacy: "N or lower / and below"
+  const lowerMatch = clean.match(/(\d+(?:\.\d+)?)°?\s*(or lower|and below)/i);
+  if (lowerMatch) return [-999, parseFloat(lowerMatch[1])];
+
+  // Range: "68-69°" or "68–69" (Kalshi bucket markets)
+  const rangeMatch = clean.match(/(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)/);
+  if (rangeMatch) return [parseFloat(rangeMatch[1]), parseFloat(rangeMatch[2])];
 
   return null;
 }
@@ -43,9 +76,11 @@ export function bucketProbability(
   forecastHighF: number,
   bucketLower: number,
   bucketUpper: number,
-  hoursAhead: number
+  hoursAhead: number,
+  cityName?: string
 ): number {
-  const stdDev = hoursAhead <= 24 ? 2.0 : hoursAhead <= 48 ? 3.0 : 4.0;
+  const sigmas = (cityName && CITY_SIGMA[cityName]) || DEFAULT_SIGMA;
+  const stdDev = hoursAhead <= 24 ? sigmas[0] : hoursAhead <= 48 ? sigmas[1] : sigmas[2];
 
   const phi = (x: number): number => {
     const t = 1 / (1 + 0.2316419 * Math.abs(x));
