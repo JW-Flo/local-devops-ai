@@ -24,6 +24,7 @@ export class MarketAgent {
   private executor: OrderExecutor;
   private settlement: SettlementService | null = null;
   private noaaTimer: NodeJS.Timeout | null = null;
+  private bankrollTimer: NodeJS.Timeout | null = null;
   private bankroll = 0;
   private marketMeta: Map<string, { title: string; ticker: string }> = new Map();
   private running = false;
@@ -113,6 +114,19 @@ export class MarketAgent {
     await this.pollNOAA();
     this.noaaTimer = setInterval(() => this.pollNOAA(), 30 * 60 * 1000);
 
+    // Periodic bankroll refresh — catches external transfers, fees, settlements
+    this.bankrollTimer = setInterval(async () => {
+      try {
+        const prev = this.bankroll;
+        this.bankroll = await this.kalshiRest.getBalance();
+        if (Math.abs(this.bankroll - prev) > 0.01) {
+          console.log(`[market-agent] Bankroll sync: $${prev.toFixed(2)} → $${this.bankroll.toFixed(2)}`);
+        }
+      } catch (err) {
+        console.warn('[market-agent] Bankroll sync failed:', (err as Error).message);
+      }
+    }, 30 * 60 * 1000); // every 30 minutes
+
     // Allow 30s for WS ticker data to warm the cache before first scan
     setTimeout(() => {
       this.warmedUp = true;
@@ -130,6 +144,7 @@ export class MarketAgent {
 
     console.log('Stopping Market Agent');
     if (this.noaaTimer) clearInterval(this.noaaTimer);
+    if (this.bankrollTimer) clearInterval(this.bankrollTimer);
     if (this.settlement) this.settlement.stop();
     this.feed.stop();
 
@@ -207,8 +222,9 @@ export class MarketAgent {
     const orderbook = this.feed.getOrderbook();
     const tickerCache = this.feed.getTickerSnapshot();
 
-    // Don't poison the cooldown if we have no price data yet (WS still warming up)
-    if (tickerCache.size === 0) return;
+    // Need at least some price data — either from WS ticker channel or REST orderbook
+    const hasOrderbookData = orderbook.getBookCount() > 0;
+    if (tickerCache.size === 0 && !hasOrderbookData) return;
     this.lastScanTime = Date.now();
 
     const signals = this.detector.detectAll(orderbook, forecasts, this.bankroll, this.marketMeta, tickerCache);
@@ -341,13 +357,19 @@ function requireAuth(req: Request, res: Response, next: () => void): void {
     }
   }
 
-  // Rate limit mutation endpoints
+  // Rate limit mutation endpoints (with cleanup to prevent unbounded growth)
   const key = `${ip}:${req.path}`;
   const now = Date.now();
   let entry = rateLimitMap.get(key);
   if (!entry || now > entry.resetAt) {
     entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
     rateLimitMap.set(key, entry);
+    // Periodic cleanup: purge expired entries when map grows large
+    if (rateLimitMap.size > 100) {
+      for (const [k, v] of rateLimitMap) {
+        if (now > v.resetAt) rateLimitMap.delete(k);
+      }
+    }
   }
   entry.count++;
   if (entry.count > RATE_LIMIT_MAX) {

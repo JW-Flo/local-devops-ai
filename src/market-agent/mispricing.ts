@@ -1,24 +1,10 @@
 import type { Database } from 'sql.js';
 import { OrderbookState } from './orderbook.js';
-import { DailyForecast, MispricingSignal, MispricingPayload, CITIES, CityConfig } from './types.js';
+import { DailyForecast, MispricingSignal, MispricingPayload, CITIES, CityConfig, parseDateFromTicker } from './types.js';
 import { calculatePositionSize } from './kelly.js';
 import { bucketProbability, parseBucketFromTitle, getForecastConfidence } from './weather.js';
 import { withDb } from '../storage/sqlite.js';
 import type { TickerUpdate } from './kalshi-ws.js';
-
-const MONTH_MAP: Record<string, string> = {
-  JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06',
-  JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12',
-};
-
-/** Parse target date from ticker like KXHIGHNY-26MAR30-B64.5 → "2026-03-30" */
-function parseDateFromTicker(ticker: string): string | null {
-  const m = ticker.match(/-(\d{2})([A-Z]{3})(\d{2})-/);
-  if (!m) return null;
-  const month = MONTH_MAP[m[2]];
-  if (!month) return null;
-  return `20${m[1]}-${month}-${m[3].padStart(2, '0')}`;
-}
 
 const DEFAULT_EDGE_THRESHOLD = 0.03;  // 3 cents minimum edge (bucket markets)
 const THRESHOLD_EDGE_MULTIPLIER = 1.5; // threshold (T) markets require 1.5× edge vs bucket (B) — wider spreads, more uncertainty
