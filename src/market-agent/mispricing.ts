@@ -12,7 +12,12 @@ const DEFAULT_KELLY_FRACTION = 0.25;  // quarter-Kelly (configurable to half-Kel
 const MAX_POSITION_PCT = 0.25;        // 25% max per market
 const NO_BUY_MAX_MODEL_PROB = 0.15;   // only sell against buckets where our model says < 15% probability
 const NO_BUY_MIN_YES_BID = 0.06;      // market YES bid must be at least 6¢ for NO trade to have meaningful edge
-const MIN_ASK_SIZE = 5;               // skip markets with fewer than 5 contracts available at best ask
+const MIN_ASK_SIZE = 10;              // skip markets with fewer than 10 contracts at best ask (was 5 — too thin)
+const MIN_ASK_PRICE = 0.05;           // minimum $0.05 ask price — filters phantom $0.01 stale liquidity
+const MAX_SPREAD_RATIO = 0.50;        // skip if bid-ask spread exceeds 50% of ask price
+// Trading hours: 9 AM – 5 PM Eastern = 13:00 – 22:00 UTC (adjusts for DST — close enough)
+const TRADING_HOUR_START_UTC = 13;
+const TRADING_HOUR_END_UTC = 22;
 
 export class MispricingDetector {
   private currentSignals: MispricingSignal[] = [];
@@ -67,6 +72,17 @@ export class MispricingDetector {
       console.log(`[mispricing-diag] ${JSON.stringify(diag, null, 2)}`);
     }
 
+    // ── Trading hours gate: only generate signals during active market hours ──
+    const currentHourUTC = new Date().getUTCHours();
+    if (currentHourUTC < TRADING_HOUR_START_UTC || currentHourUTC >= TRADING_HOUR_END_UTC) {
+      // Outside 9 AM – 5 PM ET: no new signals. Stale books, phantom liquidity.
+      if (!this.diagnosticRun) {
+        console.log(`[mispricing] Outside trading hours (UTC ${currentHourUTC}h) — skipping signal detection`);
+      }
+      this.currentSignals = [];
+      return [];
+    }
+
     for (const [ticker, meta] of marketMeta) {
       // Price: prefer live ticker channel bid/ask; fall back to orderbook depth
       let bestAsk: number | undefined;
@@ -89,8 +105,18 @@ export class MispricingDetector {
       }
       if (!bestAsk || bestAsk <= 0) continue;
 
+      // ── Price floor: reject phantom/stale penny asks ──
+      if (bestAsk < MIN_ASK_PRICE) continue;
+
       // ── Liquidity filter: skip illiquid markets ──
       if (askSize < MIN_ASK_SIZE) continue; // not enough depth to trade
+
+      // ── Spread filter: skip wide-spread markets (sign of stale/illiquid book) ──
+      const yesBidPrice = tickerSnap?.yes_bid_dollars ?? 0;
+      if (yesBidPrice > 0 && bestAsk > 0) {
+        const spread = bestAsk - yesBidPrice;
+        if (spread / bestAsk > MAX_SPREAD_RATIO) continue; // spread > 50% of ask = no real market
+      }
 
       // Skip same-day markets only after 22:00 UTC (6 PM ET) — daily high is locked in by then
       const targetDate = parseDateFromTicker(ticker);
