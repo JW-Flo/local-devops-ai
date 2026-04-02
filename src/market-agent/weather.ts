@@ -15,15 +15,18 @@ import { CityConfig, CITIES, TempBucket } from './types.js';
  * Each entry: [24h σ, 48h σ, 72h+ σ]
  */
 const CITY_SIGMA: Record<string, [number, number, number]> = {
-  'New York':  [4.0, 5.5, 7.0],
-  'Los Angeles': [3.0, 4.0, 5.5],
-  'Chicago':   [3.5, 5.0, 6.5],
-  'Miami':     [2.5, 3.5, 5.0],
-  'Dallas':    [3.0, 4.5, 6.0],
-  'Denver':    [4.5, 6.0, 7.5],
-  'Austin':    [3.0, 4.5, 6.0],
+  'New York':  [6.0, 8.0, 10.5],   // was [4.0, 5.5, 7.0] — 1.5× wider; 0/6 win rate showed overconfidence
+  'Los Angeles': [4.5, 6.0, 8.0],  // was [3.0, 4.0, 5.5] — marine layer makes tails fatter than modeled
+  'Chicago':   [5.0, 7.5, 10.0],   // was [3.5, 5.0, 6.5] — lake effect + continental swings
+  'Miami':     [3.5, 5.0, 7.5],    // was [2.5, 3.5, 5.0] — stable but still underestimated
+  'Dallas':    [4.5, 6.5, 9.0],    // was [3.0, 4.5, 6.0]
+  'Denver':    [6.5, 9.0, 11.0],   // was [4.5, 6.0, 7.5] — mountain variance is extreme
+  'Austin':    [4.5, 6.5, 9.0],    // was [3.0, 4.5, 6.0]
 };
-const DEFAULT_SIGMA: [number, number, number] = [3.5, 5.0, 6.5];
+const DEFAULT_SIGMA: [number, number, number] = [5.0, 7.5, 10.0];
+
+/** Hard cap on model confidence — never claim >85% on any single event */
+const MAX_MODEL_CONFIDENCE = 0.85;
 
 export function parseBucketFromTitle(title: string): [number, number] | null {
   // Strip markdown bold markers (Kalshi titles use **text**)
@@ -96,7 +99,9 @@ export function bucketProbability(
   const zLower = (adjLower - forecastHighF) / stdDev;
   const zUpper = (adjUpper - forecastHighF) / stdDev;
 
-  return Math.max(0, Math.min(1, phi(zUpper) - phi(zLower)));
+  const raw = Math.max(0, Math.min(1, phi(zUpper) - phi(zLower)));
+  // Cap confidence — model should never claim >85% on any single weather event
+  return Math.min(raw, MAX_MODEL_CONFIDENCE);
 }
 
 export function getCityConfig(name: string): CityConfig | undefined {
