@@ -6,9 +6,10 @@ import { bucketProbability, parseBucketFromTitle, getForecastConfidence } from '
 import { withDb } from '../storage/sqlite.js';
 import type { TickerUpdate } from './kalshi-ws.js';
 
-const DEFAULT_EDGE_THRESHOLD = 0.03;  // 3 cents minimum edge (bucket markets)
-const THRESHOLD_EDGE_MULTIPLIER = 1.5; // threshold (T) markets require 1.5× edge vs bucket (B) — wider spreads, more uncertainty
-const DEFAULT_KELLY_FRACTION = 0.25;  // quarter-Kelly (configurable to half-Kelly via API)
+const DEFAULT_EDGE_THRESHOLD = 0.15;  // 15 cents minimum edge (was 3¢ — 0/11 win rate; 10¢ still too loose)
+const THRESHOLD_EDGE_MULTIPLIER = 2.0; // threshold (T) markets require 2× edge (was 1.5×) — wider tails, more uncertainty
+const MARKET_SHRINKAGE = 0.30;         // blend 30% market price into model probability (Bayesian humility)
+const DEFAULT_KELLY_FRACTION = 0.10;  // tenth-Kelly (was 0.25 — conservative for $10 bankroll, configurable via API)
 const MAX_POSITION_PCT = 0.25;        // 25% max per market
 const NO_BUY_MAX_MODEL_PROB = 0.15;   // only sell against buckets where our model says < 15% probability
 const NO_BUY_MIN_YES_BID = 0.06;      // market YES bid must be at least 6¢ for NO trade to have meaningful edge
@@ -153,13 +154,22 @@ export class MispricingDetector {
       );
       const confidence = getForecastConfidence(hoursAhead);
 
-      const prob = bucketProbability(
+      const rawProb = bucketProbability(
         matchedForecast.highF,
         bucket[0],
         bucket[1],
         hoursAhead,
         city.name
       );
+
+      // ── Market shrinkage: blend model toward market implied probability ──
+      // Prevents overconfident trades when model says 95% and market says 15%
+      const marketImpliedProb = bestAsk; // YES ask ≈ implied probability
+      const prob = rawProb * (1 - MARKET_SHRINKAGE) + marketImpliedProb * MARKET_SHRINKAGE;
+
+      // ── Discount by forecast confidence (further out = less certain) ──
+      // confidence ranges 0.75–0.94 depending on hoursAhead
+      const discountedProb = prob * confidence;
 
       // ── Determine market type: threshold (T) vs bucket (B) ──
       // Threshold markets (e.g., KXHIGHNY-26APR02-T72) have wider spreads and more model uncertainty
@@ -169,23 +179,23 @@ export class MispricingDetector {
         : this.edgeThreshold;
 
       // ── YES-BUY: model probability exceeds market price ──
-      if (prob >= 0.05) {
-        const expectedValue = prob * 1.0;
+      if (discountedProb >= 0.05) {
+        const expectedValue = discountedProb * 1.0;
         const edge = expectedValue - bestAsk;
 
         if (edge >= effectiveEdgeThreshold) {
-          const sizing = calculatePositionSize(prob, bestAsk, bankroll, this.kellyFraction, MAX_POSITION_PCT);
+          const sizing = calculatePositionSize(discountedProb, bestAsk, bankroll, this.kellyFraction, MAX_POSITION_PCT);
           const cappedContracts = Math.min(sizing.contracts, askSize); // cap to available liquidity
           if (cappedContracts <= 0) continue;
           const signal: MispricingSignal = {
             ticker, city: city.name, targetDate: matchedForecast.targetDate,
-            noaaForecastF: matchedForecast.highF, noaaConfidence: prob,
+            noaaForecastF: matchedForecast.highF, noaaConfidence: discountedProb,
             bucketRange: bucket, marketPrice: bestAsk, impliedProb: bestAsk,
             expectedValue, edge, kellyFraction: sizing.kellyAdjusted,
             recommendedContracts: cappedContracts, side: 'yes', action: 'buy',
           };
           signals.push(signal);
-          this.logSignalIfNew(signal, `YES-BUY`, city.name, matchedForecast.highF, prob, bestAsk, edge, sizing.contracts);
+          this.logSignalIfNew(signal, `YES-BUY`, city.name, matchedForecast.highF, discountedProb, bestAsk, edge, sizing.contracts);
         }
       }
 
@@ -198,9 +208,9 @@ export class MispricingDetector {
         const book = orderbook.getBook(ticker);
         yesBid = book?.yesBids[0]?.price ?? 0;
       }
-      if (prob < NO_BUY_MAX_MODEL_PROB && yesBid >= NO_BUY_MIN_YES_BID) {
+      if (discountedProb < NO_BUY_MAX_MODEL_PROB && yesBid >= NO_BUY_MIN_YES_BID) {
         const noPrice = 1 - yesBid;            // approximate NO ask price
-        const winProb = 1 - prob;               // probability bucket does NOT hit
+        const winProb = 1 - discountedProb;     // probability bucket does NOT hit
         const noEV = winProb * 1.0;
         const noEdge = noEV - noPrice;
 
@@ -211,13 +221,13 @@ export class MispricingDetector {
           if (noCappedContracts <= 0) continue;
           const noSignal: MispricingSignal = {
             ticker, city: city.name, targetDate: matchedForecast.targetDate,
-            noaaForecastF: matchedForecast.highF, noaaConfidence: winProb,
+            noaaForecastF: matchedForecast.highF, noaaConfidence: discountedProb,
             bucketRange: bucket, marketPrice: noPrice, impliedProb: 1 - yesBid,
             expectedValue: noEV, edge: noEdge, kellyFraction: noSizing.kellyAdjusted,
             recommendedContracts: noCappedContracts, side: 'no', action: 'buy',
           };
           signals.push(noSignal);
-          this.logSignalIfNew(noSignal, `NO-BUY`, city.name, matchedForecast.highF, prob, noPrice, noEdge, noSizing.contracts);
+          this.logSignalIfNew(noSignal, `NO-BUY`, city.name, matchedForecast.highF, discountedProb, noPrice, noEdge, noSizing.contracts);
         }
       }
     }
