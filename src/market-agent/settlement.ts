@@ -77,27 +77,39 @@ export class SettlementService {
 
     console.log(`[settlement] Checking ${unsettledTrades.length} unsettled trades`);
 
-    // 2. Query Kalshi for each unique ticker's market status
-    const checkedTickers = new Set<string>();
-    for (const trade of unsettledTrades) {
-      if (checkedTickers.has(trade.ticker)) continue;
-      checkedTickers.add(trade.ticker);
+    // 2. Query Kalshi for each unique ticker's market status (batched for speed)
+    const uniqueTickers = [...new Set(unsettledTrades.map(t => t.ticker))];
+    const BATCH_SIZE = 5;
 
-      try {
-        const market = await this.rest.getMarket(trade.ticker);
+    for (let i = 0; i < uniqueTickers.length; i += BATCH_SIZE) {
+      const batch = uniqueTickers.slice(i, i + BATCH_SIZE);
+      const marketResults = await Promise.allSettled(
+        batch.map(ticker => this.rest.getMarket(ticker))
+      );
+
+      for (let j = 0; j < batch.length; j++) {
+        const ticker = batch[j];
+        const result = marketResults[j];
+
+        if (result.status === 'rejected') {
+          console.error(`[settlement] Failed to check ${ticker}:`, result.reason?.message || result.reason);
+          continue;
+        }
+
+        const market = result.value;
         if (!market) continue;
 
-        // Only process settled/closed markets
-        if (market.status !== 'settled' && market.status !== 'closed') continue;
+        // Only process resolved markets (Kalshi uses 'finalized', 'settled', or 'closed')
+        if (!['settled', 'closed', 'finalized'].includes(market.status)) continue;
 
         const marketResult = market.result; // 'yes' or 'no'
         if (!marketResult) {
-          console.warn(`[settlement] Market ${trade.ticker} is ${market.status} but has no result`);
+          console.warn(`[settlement] Market ${ticker} is ${market.status} but has no result`);
           continue;
         }
 
         // Find all trades for this ticker
-        const tickerTrades = unsettledTrades.filter(t => t.ticker === trade.ticker);
+        const tickerTrades = unsettledTrades.filter(t => t.ticker === ticker);
         for (const t of tickerTrades) {
           const outcome = this.determineOutcome(t.side, marketResult);
           const pnl = this.calculatePnl(outcome, t.contracts, t.fillPrice);
@@ -144,8 +156,6 @@ export class SettlementService {
             `${t.contracts}@$${t.fillPrice.toFixed(2)} → P&L $${pnl.toFixed(2)}`
           );
         }
-      } catch (err) {
-        console.error(`[settlement] Failed to check ${trade.ticker}:`, (err as Error).message);
       }
     }
 

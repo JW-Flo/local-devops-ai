@@ -1,4 +1,4 @@
-import { MispricingSignal, SafetyCheck } from './types.js';
+import { MispricingSignal, SafetyCheck, parseCityFromTicker } from './types.js';
 
 const MAX_DAILY_LOSS_PCT = 0.15;   // 15% daily loss limit
 const MAX_POSITION_PCT = 0.25;     // 25% max per market
@@ -35,10 +35,10 @@ export class SafetyGuard {
 
     const activeCities = new Set<string>();
     for (const [ticker] of this.positions) {
-      const cityMatch = ticker.match(/^KXHIGH(NY|LAX|CHI|MIA|DFW|DEN|AUS)/);
-      if (cityMatch) activeCities.add(cityMatch[1]);
+      const city = parseCityFromTicker(ticker);
+      if (city) activeCities.add(city);
     }
-    const signalCity = signal.ticker.match(/^KXHIGH(NY|LAX|CHI|MIA|DFW|DEN|AUS)/)?.[1];
+    const signalCity = parseCityFromTicker(signal.ticker);
     if (signalCity && !activeCities.has(signalCity) && activeCities.size >= 4) {
       return { passed: false, reason: `Correlation limit: already exposed to ${activeCities.size} cities` };
     }
@@ -112,8 +112,8 @@ export class SafetyGuard {
   } {
     const activeCities = new Set<string>();
     for (const [ticker] of this.positions) {
-      const m = ticker.match(/^KXHIGH(NY|LAX|CHI|MIA|DFW|DEN|AUS)/);
-      if (m) activeCities.add(m[1]);
+      const city = parseCityFromTicker(ticker);
+      if (city) activeCities.add(city);
     }
 
     return {

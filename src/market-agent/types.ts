@@ -168,3 +168,40 @@ export const CITIES: CityConfig[] = [
 ];
 
 export type KalshiRestInterfaceType = Record<string, unknown>;
+
+// ── Centralized ticker/city parsing utilities ──
+
+/** City abbreviation as it appears in Kalshi tickers (NY, LAX, CHI, MIA, DFW, DEN, AUS) */
+export type CityAbbrev = 'NY' | 'LAX' | 'CHI' | 'MIA' | 'DFW' | 'DEN' | 'AUS';
+
+const CITY_ABBREV_REGEX = /^KXHIGH(NY|LAX|CHI|MIA|DFW|DEN|AUS)/;
+
+/** Extract city abbreviation from a KXHIGH ticker. Returns null if not a known city. */
+export function parseCityFromTicker(ticker: string): CityAbbrev | null {
+  const m = ticker.match(CITY_ABBREV_REGEX);
+  return m ? (m[1] as CityAbbrev) : null;
+}
+
+/** Map city abbreviation to full display name */
+export const CITY_DISPLAY_NAME: Record<CityAbbrev, string> = {
+  NY: 'NYC', LAX: 'LA', CHI: 'Chicago', MIA: 'Miami', DFW: 'Dallas', DEN: 'Denver', AUS: 'Austin',
+};
+
+/** Find CityConfig by ticker */
+export function cityConfigFromTicker(ticker: string): CityConfig | undefined {
+  return CITIES.find(c => ticker.startsWith(c.seriesTicker));
+}
+
+const MONTH_MAP: Record<string, string> = {
+  JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06',
+  JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12',
+};
+
+/** Parse target date from ticker like KXHIGHNY-26MAR30-B64.5 → "2026-03-30" */
+export function parseDateFromTicker(ticker: string): string | null {
+  const m = ticker.match(/-(\d{2})([A-Z]{3})(\d{2})-/);
+  if (!m) return null;
+  const month = MONTH_MAP[m[2]];
+  if (!month) return null;
+  return `20${m[1]}-${month}-${m[3].padStart(2, '0')}`;
+}
