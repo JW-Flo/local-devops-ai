@@ -527,6 +527,31 @@ export function createMarketAgentRouter(): Router {
     res.json(agentInstance.getPerformanceStats());
   });
 
+  router.get('/trades', async (req: Request, res: Response) => {
+    try {
+      const limit = Math.min(Number(req.query.limit) || 100, 500);
+      const rows = await withDb(async (db: Database) => {
+        const stmt = db.prepare(
+          `SELECT ticker, city, target_date, side, predicted_prob, market_price, edge,
+                  kelly_fraction, contracts, fill_price, paper_trade, outcome, actual_high_f, pnl,
+                  created_at, settled_at
+           FROM trade_performance ORDER BY created_at DESC LIMIT ?`
+        );
+        stmt.bind([limit]);
+        const results: any[] = [];
+        while (stmt.step()) {
+          const row = stmt.getAsObject();
+          results.push(row);
+        }
+        stmt.free();
+        return results;
+      }, { db: 'market-agent' });
+      res.json({ trades: rows, total: rows.length });
+    } catch (err) {
+      res.status(500).json({ status: 'error', message: (err as Error).message });
+    }
+  });
+
   router.post('/settlement/run', requireAuth, async (req: Request, res: Response) => {
     if (!agentInstance) {
       res.status(400).json({ status: 'error', message: 'Agent not running' });

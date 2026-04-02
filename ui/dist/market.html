@@ -67,7 +67,9 @@ tr:hover { background:var(--surface2); }
     <div id="controls">
       <button class="btn btn-green" onclick="startAgent()">Start</button>
       <button class="btn" onclick="stopAgent()">Stop</button>
-      <button class="btn btn-danger" onclick="killSwitch()">KILL SWITCH</button>
+      <button class="btn" onclick="setPaperMode(true)">Paper Mode</button>
+      <button class="btn btn-green" onclick="goLive()">Go Live</button>
+      <button class="btn btn-danger" onclick="killSwitch()">KILL</button>
     </div>
   </div>
   <div id="status-bar" style="margin-bottom:16px;"></div>
@@ -76,8 +78,8 @@ tr:hover { background:var(--surface2); }
   <div class="grid grid-4" id="kpi-cards">
     <div class="card"><h3>Status</h3><div class="value" id="kpi-status">--</div><div class="sub" id="kpi-uptime"></div></div>
     <div class="card"><h3>Balance</h3><div class="value mono" id="kpi-balance">--</div><div class="sub" id="kpi-pnl"></div></div>
-    <div class="card"><h3>Open Positions</h3><div class="value" id="kpi-positions">--</div><div class="sub" id="kpi-exposure"></div></div>
-    <div class="card"><h3>Signals Today</h3><div class="value" id="kpi-signals">--</div><div class="sub" id="kpi-trades"></div></div>
+    <div class="card"><h3>Signals</h3><div class="value" id="kpi-signals">--</div><div class="sub" id="kpi-trades"></div></div>
+    <div class="card"><h3>Performance</h3><div class="value" id="kpi-perf">--</div><div class="sub" id="kpi-perf-sub"></div></div>
   </div>
 
   <!-- Forecasts + Signals -->
@@ -92,20 +94,20 @@ tr:hover { background:var(--surface2); }
     <div class="card">
       <h3>Active Signals</h3>
       <table>
-        <thead><tr><th>Ticker</th><th>Edge</th><th>Kelly %</th><th>Side</th><th>Status</th></tr></thead>
+        <thead><tr><th>Ticker</th><th>Edge</th><th>Kelly %</th><th>Prob / Price</th><th>Status</th></tr></thead>
         <tbody id="signals-table"></tbody>
       </table>
     </div>
   </div>
 
-  <!-- Recent Trades -->
+  <!-- Paper Trade History -->
   <div class="card" style="margin-top:16px;">
-    <h3>Recent Trades</h3>
+    <h3>Trade History (Paper + Live)</h3>
     <table>
-      <thead><tr><th>Time</th><th>Ticker</th><th>Side</th><th>Price</th><th>Size</th><th>Edge</th><th>Haiku</th></tr></thead>
+      <thead><tr><th>Time</th><th>Ticker</th><th>City</th><th>Side</th><th>Prob</th><th>Price</th><th>Edge</th><th>Contracts</th><th>Outcome</th><th>P&amp;L</th></tr></thead>
       <tbody id="trades-table"></tbody>
     </table>
-    <div id="no-trades" style="padding:20px;text-align:center;color:var(--text-muted);">No trades yet</div>
+    <div id="no-trades" style="padding:20px;text-align:center;color:var(--text-muted);">No paper trades yet — waiting for mispricing detection</div>
   </div>
 
   <!-- Event Log -->
@@ -131,16 +133,40 @@ let refreshTimer = null;
 
 async function refresh() {
   try {
-    const [statusData, forecastData, signalData] = await Promise.all([
+    const [statusData, forecastData, signalData, eventsData, tradesData] = await Promise.all([
       api('/status'),
       api('/forecasts').catch(() => ({ forecasts: [] })),
       api('/signals').catch(() => ({ signals: [] })),
+      api('/events?limit=50').catch(() => ({ events: [], summary: {} })),
+      api('/trades?limit=100').catch(() => ({ trades: [] })),
     ]);
     const d = statusData.data || statusData;
-    updateKPIs(d);
+    updateKPIs(d, eventsData.summary || {});
     updateForecasts(forecastData.forecasts || []);
     updateSignals(signalData.signals || []);
     updateStatusBar(d);
+    updateTrades(tradesData.trades || []);
+
+    // Populate event log from recent events (on first load or when log is sparse)
+    const allEvents = eventsData.events || [];
+    if (allEvents.length > 0 && !window._eventsSeeded) {
+      window._eventsSeeded = true;
+      allEvents.slice().reverse().forEach(e => {
+        const typeMap = {
+          mispricing_detected: 'signal', trade_executed: 'trade', trade_rejected: 'trade',
+          forecast_update: 'forecast', bot_started: 'start', bot_stopped: 'stop',
+          ws_connected: 'info', ws_disconnected: 'error', orderbook_snapshot: 'info',
+        };
+        const p = e.payload || {};
+        let msg = `${e.event_type}`;
+        if (e.market_ticker) msg += ` ${e.market_ticker}`;
+        if (p.edge) msg += ` edge=$${Number(p.edge).toFixed(3)}`;
+        if (p.city) msg += ` ${p.city}`;
+        if (p.forecast_high_f) msg += ` ${p.forecast_high_f}°F`;
+        if (p.reason) msg += ` — ${p.reason.slice(0, 60)}`;
+        logEvent(typeMap[e.event_type] || 'info', msg, e.timestamp_ms);
+      });
+    }
   } catch (e) {
     document.getElementById('kpi-status').textContent = 'Error';
     document.getElementById('kpi-status').className = 'value negative';
@@ -150,8 +176,8 @@ async function refresh() {
 function updateStatusBar(d) {
   const bar = document.getElementById('status-bar');
   if (!d.running) { bar.innerHTML = ''; return; }
-  const mode = d.dryRun
-    ? '<span class="badge badge-yellow">DRY RUN</span>'
+  const mode = d.paperMode
+    ? '<span class="badge badge-yellow">PAPER MODE</span>'
     : '<span class="badge badge-red">LIVE TRADING</span>';
   const ws = d.wsConnected
     ? '<span class="badge badge-green">WS Connected</span>'
@@ -160,7 +186,7 @@ function updateStatusBar(d) {
   bar.innerHTML = [mode, ws, mkts].join(' ');
 }
 
-function updateKPIs(d) {
+function updateKPIs(d, summary) {
   const statusEl = document.getElementById('kpi-status');
   const running = d.running || d.status === 'running';
   const safety = d.safety || {};
@@ -176,12 +202,24 @@ function updateKPIs(d) {
   pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + Number(pnl).toFixed(2) + ' today';
   pnlEl.className = 'sub ' + (pnl >= 0 ? 'positive' : 'negative');
 
-  document.getElementById('kpi-positions').textContent = safety.positionCount ?? d.openPositions ?? '--';
-  const exp = safety.totalExposure ?? d.exposure;
-  document.getElementById('kpi-exposure').textContent = exp != null ? '$' + Number(exp).toFixed(2) + ' exposure' : '';
-
   document.getElementById('kpi-signals').textContent = d.signals ?? d.signalCount ?? '--';
-  document.getElementById('kpi-trades').textContent = (d.tradeCount ?? 0) + ' trades executed';
+  const mispricings = (summary && summary.mispricing_detected) || 0;
+  const paperCount = (summary && summary.paper_trade) || 0;
+  document.getElementById('kpi-trades').textContent = mispricings + ' detections · ' + paperCount + ' paper trades';
+
+  const perf = d.performance || {};
+  const perfEl = document.getElementById('kpi-perf');
+  const perfSubEl = document.getElementById('kpi-perf-sub');
+  if (perf.totalTrades > 0) {
+    const wr = perf.settled > 0 ? (perf.winRate * 100).toFixed(0) + '% win' : 'unsettled';
+    perfEl.textContent = perf.totalTrades + ' trades';
+    const pnlStr = perf.totalPnL !== 0 ? (perf.totalPnL >= 0 ? '+' : '') + '$' + perf.totalPnL.toFixed(2) : 'pending';
+    perfSubEl.textContent = 'Win rate: ' + wr + ' · P&L: ' + pnlStr;
+    perfSubEl.className = 'sub ' + (perf.totalPnL >= 0 ? 'positive' : 'negative');
+  } else {
+    perfEl.textContent = '--';
+    perfSubEl.textContent = 'No trades recorded';
+  }
 }
 
 function updateForecasts(forecasts) {
@@ -204,13 +242,20 @@ function updateForecasts(forecasts) {
 function updateSignals(signals) {
   const tbody = document.getElementById('signals-table');
   if (!signals.length) { tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No active signals</td></tr>'; return; }
-  tbody.innerHTML = signals.map(s => `<tr>
-    <td class="mono">${s.ticker || s.market_ticker || '--'}</td>
-    <td class="mono ${(s.edge||0) > 0 ? 'positive' : 'negative'}">${((s.edge||0)*100).toFixed(1)}¢</td>
-    <td class="mono">${((s.kellyPct||s.kelly||0)*100).toFixed(1)}%</td>
-    <td><span class="badge ${s.side === 'yes' ? 'badge-green' : 'badge-red'}">${s.side || '--'}</span></td>
-    <td><span class="badge ${s.status === 'executed' ? 'badge-green' : s.status === 'rejected' ? 'badge-red' : 'badge-yellow'}">${s.status || 'pending'}</span></td>
-  </tr>`).join('');
+  tbody.innerHTML = signals.map(s => {
+    const edge = s.edge || 0;
+    const kelly = s.kellyFraction || s.kellyPct || s.kelly || 0;
+    const contracts = s.recommendedContracts || 0;
+    const city = s.city || '';
+    const prob = s.noaaConfidence || 0;
+    return `<tr>
+      <td class="mono" title="${city} ${s.targetDate || ''}">${s.ticker || '--'}</td>
+      <td class="mono ${edge > 0 ? 'positive' : 'negative'}">${(edge*100).toFixed(1)}¢</td>
+      <td class="mono">${(kelly*100).toFixed(1)}%</td>
+      <td class="mono">${(prob*100).toFixed(0)}% @ $${(s.marketPrice||0).toFixed(2)}</td>
+      <td><span class="badge ${contracts > 0 ? 'badge-green' : 'badge-yellow'}">${contracts > 0 ? contracts + ' ctrs' : 'signal only'}</span></td>
+    </tr>`;
+  }).join('');
 }
 
 function updateTrades(trades) {
@@ -218,20 +263,37 @@ function updateTrades(trades) {
   const noTrades = document.getElementById('no-trades');
   if (!trades.length) { tbody.innerHTML = ''; noTrades.style.display = 'block'; return; }
   noTrades.style.display = 'none';
-  tbody.innerHTML = trades.map(t => `<tr>
-    <td style="color:var(--text-muted)">${new Date(t.timestamp).toLocaleTimeString()}</td>
-    <td class="mono">${t.ticker}</td>
-    <td><span class="badge ${t.side === 'yes' ? 'badge-green' : 'badge-red'}">${t.side}</span></td>
-    <td class="mono">$${Number(t.price).toFixed(2)}</td>
-    <td class="mono">${t.size}</td>
-    <td class="mono positive">${((t.edge||0)*100).toFixed(1)}¢</td>
-    <td><span class="badge ${t.haikuApproved ? 'badge-green' : 'badge-red'}">${t.haikuApproved ? '✓' : '✗'}</span></td>
-  </tr>`).join('');
+  tbody.innerHTML = trades.map(t => {
+    const time = t.created_at ? new Date(t.created_at).toLocaleString() : '--';
+    const prob = t.predicted_prob != null ? (t.predicted_prob * 100).toFixed(0) + '%' : '--';
+    const price = t.fill_price != null ? '$' + Number(t.fill_price).toFixed(2) : '--';
+    const edge = t.edge != null ? (t.edge * 100).toFixed(1) + '¢' : '--';
+    const side = (t.side || 'yes').toUpperCase();
+    const sideClass = t.side === 'yes' ? 'badge-green' : 'badge-yellow';
+    const outcome = t.outcome || (t.paper_trade ? 'paper' : 'pending');
+    const outcomeClass = t.outcome === 'win' ? 'badge-green' : t.outcome === 'loss' ? 'badge-red' : 'badge-muted';
+    const pnl = t.pnl != null ? (t.pnl >= 0 ? '+' : '') + '$' + Number(t.pnl).toFixed(2) : '--';
+    const pnlClass = t.pnl > 0 ? 'positive' : t.pnl < 0 ? 'negative' : '';
+    return `<tr>
+      <td style="color:var(--text-muted);font-size:.75rem">${time}</td>
+      <td class="mono" style="font-size:.75rem">${t.ticker || '--'}</td>
+      <td>${t.city || '--'}</td>
+      <td><span class="badge ${sideClass}">${side}</span></td>
+      <td class="mono">${prob}</td>
+      <td class="mono">${price}</td>
+      <td class="mono positive">${edge}</td>
+      <td class="mono">${t.contracts || 0}</td>
+      <td><span class="badge ${outcomeClass}">${outcome}</span></td>
+      <td class="mono ${pnlClass}">${pnl}</td>
+    </tr>`;
+  }).join('');
 }
 
-function logEvent(type, msg) {
+function logEvent(type, msg, timestampMs) {
   const log = document.getElementById('event-log');
-  const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+  const ts = timestampMs
+    ? new Date(timestampMs).toLocaleTimeString('en-US', { hour12: false })
+    : new Date().toLocaleTimeString('en-US', { hour12: false });
   const colors = {
     signal: 'var(--accent)', trade: 'var(--green)', kill: 'var(--red)',
     start: 'var(--green)', stop: 'var(--yellow)', error: 'var(--red)',
@@ -264,6 +326,23 @@ async function stopAgent() {
     refresh();
     if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
   } catch (e) { logEvent('error', 'Stop failed: ' + e.message); }
+}
+
+async function setPaperMode(enabled) {
+  try {
+    await api('/paper', { method: 'POST', body: { enabled } });
+    logEvent('info', enabled ? 'Switched to PAPER mode' : 'Paper mode disabled');
+    refresh();
+  } catch (e) { logEvent('error', 'Paper toggle failed: ' + e.message); }
+}
+
+async function goLive() {
+  if (!confirm('GO LIVE: Enable real trading with real money?')) return;
+  try {
+    await api('/live', { method: 'POST' });
+    logEvent('trade', 'LIVE TRADING ENABLED');
+    refresh();
+  } catch (e) { logEvent('error', 'Go live failed: ' + e.message); }
 }
 
 async function killSwitch() {
