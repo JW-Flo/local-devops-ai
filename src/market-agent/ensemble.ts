@@ -5,13 +5,19 @@ import { MispricingSignal, TradeValidation } from './types.js';
 const bedrock = new BedrockRuntimeClient({ region: config.awsRegion || 'us-east-1' });
 
 export async function validateWithHaiku(signal: MispricingSignal): Promise<TradeValidation> {
+  const today = new Date().toISOString().slice(0, 10);
+  const hoursToTarget = Math.max(0, (new Date(signal.targetDate).getTime() - Date.now()) / 3600000);
+
   const prompt = `You are a trading risk validator for a weather arbitrage bot on Kalshi.
+
+TODAY'S DATE: ${today}
+FORECAST HORIZON: ${hoursToTarget.toFixed(0)} hours ahead (${hoursToTarget <= 24 ? 'next-day' : hoursToTarget <= 48 ? '2-day' : hoursToTarget + 'hr'})
 
 Evaluate this trade signal and respond with JSON only (no markdown, no code fences):
 
 City: ${signal.city}
 Target Date: ${signal.targetDate}
-NOAA Forecast: ${signal.noaaForecastF}°F
+NOAA Forecast: ${signal.noaaForecastF}°F (from NWS hourly gridpoint forecast)
 Estimated Probability: ${(signal.noaaConfidence * 100).toFixed(1)}%
 Kalshi Bucket: ${signal.bucketRange[0]}°F to ${signal.bucketRange[1]}°F
 Market Price: $${signal.marketPrice.toFixed(2)}
@@ -29,7 +35,7 @@ Respond with this exact JSON format:
   try {
     const response = await bedrock.send(
       new InvokeModelCommand({
-        modelId: 'anthropic.claude-3-haiku-20240307-v1:0',
+        modelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
         contentType: 'application/json',
         body: JSON.stringify({
           anthropic_version: 'bedrock-2023-05-31',

@@ -6,6 +6,7 @@ import { validateWithHaiku } from './ensemble.js';
 import { notify } from './notifications.js';
 import { withDb } from '../storage/sqlite.js';
 import { PerformanceTracker } from './performance.js';
+import type { TickerUpdate } from './kalshi-ws.js';
 
 export class OrderExecutor {
   private rest: KalshiRest;
@@ -45,7 +46,7 @@ export class OrderExecutor {
     this.executedTickers.set(ticker, Date.now());
   }
 
-  async execute(signal: MispricingSignal, bankroll: number): Promise<boolean> {
+  async execute(signal: MispricingSignal, bankroll: number, tickerCache?: Map<string, TickerUpdate>): Promise<boolean> {
     if (this.pendingOrders.has(signal.ticker)) {
       console.log(`Order already pending for ${signal.ticker}`);
       return false;
@@ -123,10 +124,24 @@ export class OrderExecutor {
       const tradeAction = signal.action || 'buy';
 
       if (this._paperMode) {
-        // Paper trade: simulate fill at current market price
+        // Paper trade: simulate realistic fill capped to available liquidity
         orderId = `paper-${Date.now()}-${signal.ticker}-${tradeSide}`;
-        filledCount = signal.recommendedContracts;
-        console.log(`[PAPER] Simulated ${tradeSide.toUpperCase()}-${tradeAction.toUpperCase()}: ${orderId} | ${signal.ticker} | ${filledCount}@$${signal.marketPrice.toFixed(2)}`);
+        let availableSize = signal.recommendedContracts; // default: use signal's already-capped count
+        if (tickerCache) {
+          const snap = tickerCache.get(signal.ticker);
+          if (snap) {
+            // YES-BUY: limited by ask size. NO-BUY: limited by bid size (we're buying the other side)
+            availableSize = tradeSide === 'yes'
+              ? Number(snap.yes_ask_size || 0)
+              : Number(snap.yes_bid_size || 0);
+          }
+        }
+        filledCount = Math.min(signal.recommendedContracts, Math.max(0, availableSize));
+        if (filledCount <= 0) {
+          console.log(`[PAPER] Skipped ${signal.ticker} — zero liquidity at best price`);
+          return false;
+        }
+        console.log(`[PAPER] Simulated ${tradeSide.toUpperCase()}-${tradeAction.toUpperCase()}: ${orderId} | ${signal.ticker} | ${filledCount}@$${signal.marketPrice.toFixed(2)} (avail: ${availableSize})`);
       } else {
         // Live trade: place real order on Kalshi
         const orderReq: any = {

@@ -17,6 +17,7 @@ export interface TradeRecord {
   ticker: string;
   city: string;
   targetDate: string;
+  side: 'yes' | 'no';
   predictedProb: number;
   marketPrice: number;
   edge: number;
@@ -69,6 +70,7 @@ export class PerformanceTracker {
         ticker TEXT NOT NULL,
         city TEXT NOT NULL,
         target_date TEXT NOT NULL,
+        side TEXT NOT NULL DEFAULT 'yes',
         predicted_prob REAL NOT NULL,
         market_price REAL NOT NULL,
         edge REAL NOT NULL,
@@ -84,6 +86,10 @@ export class PerformanceTracker {
         created_at INTEGER NOT NULL,
         settled_at INTEGER
       )`);
+      // Migration: add side column to existing tables that lack it
+      try {
+        db.run(`ALTER TABLE trade_performance ADD COLUMN side TEXT NOT NULL DEFAULT 'yes'`);
+      } catch (_) { /* column already exists */ }
     }, { db: 'market-agent', persist: true });
 
     // Load existing records
@@ -95,6 +101,7 @@ export class PerformanceTracker {
           ticker: row.ticker,
           city: row.city,
           targetDate: row.target_date,
+          side: row.side || 'yes',
           predictedProb: row.predicted_prob,
           marketPrice: row.market_price,
           edge: row.edge,
@@ -122,6 +129,7 @@ export class PerformanceTracker {
       ticker: signal.ticker,
       city: signal.city,
       targetDate: signal.targetDate,
+      side: signal.side || 'yes',
       predictedProb: signal.noaaConfidence,
       marketPrice: signal.marketPrice,
       edge: signal.edge,
@@ -138,9 +146,9 @@ export class PerformanceTracker {
 
     await withDb(async (db: Database) => {
       db.run(
-        `INSERT INTO trade_performance (ticker, city, target_date, predicted_prob, market_price, edge, kelly_fraction, contracts, fill_price, haiku_approved, haiku_confidence, paper_trade, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [record.ticker, record.city, record.targetDate, record.predictedProb, record.marketPrice, record.edge, record.kellyFraction, record.contracts, record.fillPrice, record.haikuApproved ? 1 : 0, record.haikuConfidence, record.paperTrade ? 1 : 0, record.timestamp]
+        `INSERT INTO trade_performance (ticker, city, target_date, side, predicted_prob, market_price, edge, kelly_fraction, contracts, fill_price, haiku_approved, haiku_confidence, paper_trade, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [record.ticker, record.city, record.targetDate, record.side, record.predictedProb, record.marketPrice, record.edge, record.kellyFraction, record.contracts, record.fillPrice, record.haikuApproved ? 1 : 0, record.haikuConfidence, record.paperTrade ? 1 : 0, record.timestamp]
       );
     }, { db: 'market-agent', persist: true });
   }

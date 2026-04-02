@@ -20,11 +20,13 @@ function parseDateFromTicker(ticker: string): string | null {
   return `20${m[1]}-${month}-${m[3].padStart(2, '0')}`;
 }
 
-const DEFAULT_EDGE_THRESHOLD = 0.03;  // 3 cents minimum edge
+const DEFAULT_EDGE_THRESHOLD = 0.03;  // 3 cents minimum edge (bucket markets)
+const THRESHOLD_EDGE_MULTIPLIER = 1.5; // threshold (T) markets require 1.5× edge vs bucket (B) — wider spreads, more uncertainty
 const DEFAULT_KELLY_FRACTION = 0.25;  // quarter-Kelly (configurable to half-Kelly via API)
 const MAX_POSITION_PCT = 0.25;        // 25% max per market
 const NO_BUY_MAX_MODEL_PROB = 0.15;   // only sell against buckets where our model says < 15% probability
 const NO_BUY_MIN_YES_BID = 0.06;      // market YES bid must be at least 6¢ for NO trade to have meaningful edge
+const MIN_ASK_SIZE = 5;               // skip markets with fewer than 5 contracts available at best ask
 
 export class MispricingDetector {
   private currentSignals: MispricingSignal[] = [];
@@ -91,6 +93,10 @@ export class MispricingDetector {
       }
       if (!bestAsk || bestAsk <= 0) continue;
 
+      // ── Liquidity filter: skip illiquid markets ──
+      const askSize = tickerSnap ? Number(tickerSnap.yes_ask_size || 0) : 0;
+      if (askSize < MIN_ASK_SIZE) continue; // not enough depth to trade
+
       // Skip same-day markets — they may be in settlement and not tradeable
       const targetDate = parseDateFromTicker(ticker);
       if (targetDate === todayUTC) continue;
@@ -127,22 +133,32 @@ export class MispricingDetector {
         matchedForecast.highF,
         bucket[0],
         bucket[1],
-        hoursAhead
+        hoursAhead,
+        city.name
       );
+
+      // ── Determine market type: threshold (T) vs bucket (B) ──
+      // Threshold markets (e.g., KXHIGHNY-26APR02-T72) have wider spreads and more model uncertainty
+      const isThresholdMarket = ticker.includes('-T');
+      const effectiveEdgeThreshold = isThresholdMarket
+        ? this.edgeThreshold * THRESHOLD_EDGE_MULTIPLIER
+        : this.edgeThreshold;
 
       // ── YES-BUY: model probability exceeds market price ──
       if (prob >= 0.05) {
         const expectedValue = prob * 1.0;
         const edge = expectedValue - bestAsk;
 
-        if (edge >= this.edgeThreshold) {
+        if (edge >= effectiveEdgeThreshold) {
           const sizing = calculatePositionSize(prob, bestAsk, bankroll, this.kellyFraction, MAX_POSITION_PCT);
+          const cappedContracts = Math.min(sizing.contracts, askSize); // cap to available liquidity
+          if (cappedContracts <= 0) continue;
           const signal: MispricingSignal = {
             ticker, city: city.name, targetDate: matchedForecast.targetDate,
             noaaForecastF: matchedForecast.highF, noaaConfidence: prob,
             bucketRange: bucket, marketPrice: bestAsk, impliedProb: bestAsk,
             expectedValue, edge, kellyFraction: sizing.kellyAdjusted,
-            recommendedContracts: sizing.contracts, side: 'yes', action: 'buy',
+            recommendedContracts: cappedContracts, side: 'yes', action: 'buy',
           };
           signals.push(signal);
           this.logSignalIfNew(signal, `YES-BUY`, city.name, matchedForecast.highF, prob, bestAsk, edge, sizing.contracts);
@@ -159,14 +175,18 @@ export class MispricingDetector {
         const noEV = winProb * 1.0;
         const noEdge = noEV - noPrice;
 
-        if (noEdge >= this.edgeThreshold) {
+        if (noEdge >= effectiveEdgeThreshold) {
+          const noBidSize = tickerSnap ? Number(tickerSnap.yes_bid_size || 0) : 0;
+          if (noBidSize < MIN_ASK_SIZE) continue; // not enough liquidity on bid side for NO trade
           const noSizing = calculatePositionSize(winProb, noPrice, bankroll, this.kellyFraction, MAX_POSITION_PCT);
+          const noCappedContracts = Math.min(noSizing.contracts, noBidSize);
+          if (noCappedContracts <= 0) continue;
           const noSignal: MispricingSignal = {
             ticker, city: city.name, targetDate: matchedForecast.targetDate,
             noaaForecastF: matchedForecast.highF, noaaConfidence: winProb,
             bucketRange: bucket, marketPrice: noPrice, impliedProb: 1 - yesBid,
             expectedValue: noEV, edge: noEdge, kellyFraction: noSizing.kellyAdjusted,
-            recommendedContracts: noSizing.contracts, side: 'no', action: 'buy',
+            recommendedContracts: noCappedContracts, side: 'no', action: 'buy',
           };
           signals.push(noSignal);
           this.logSignalIfNew(noSignal, `NO-BUY`, city.name, matchedForecast.highF, prob, noPrice, noEdge, noSizing.contracts);

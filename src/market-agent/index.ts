@@ -10,6 +10,7 @@ import { SafetyGuard } from './safety.js';
 import { OrderExecutor } from './orders.js';
 import { initNotifications, notify } from './notifications.js';
 import { DailyForecast, MispricingSignal } from './types.js';
+import { SettlementService } from './settlement.js';
 
 // CITIES now imported from types.ts — single source of truth
 // Remove this local duplicate
@@ -21,6 +22,7 @@ export class MarketAgent {
   private detector: MispricingDetector;
   private safety: SafetyGuard;
   private executor: OrderExecutor;
+  private settlement: SettlementService | null = null;
   private noaaTimer: NodeJS.Timeout | null = null;
   private bankroll = 0;
   private marketMeta: Map<string, { title: string; ticker: string }> = new Map();
@@ -81,6 +83,10 @@ export class MarketAgent {
 
       // Sync existing positions so safety guard and dedup survive restarts
       await this.syncPositionsFromKalshi();
+
+      // Start settlement service to resolve completed trades
+      this.settlement = new SettlementService(this.kalshiRest, this.executor.getPerformance(), this.safety);
+      this.settlement.start();
     } catch (err) {
       const msg = (err as Error).message;
       this.authenticated = false;
@@ -124,6 +130,7 @@ export class MarketAgent {
 
     console.log('Stopping Market Agent');
     if (this.noaaTimer) clearInterval(this.noaaTimer);
+    if (this.settlement) this.settlement.stop();
     this.feed.stop();
 
     withDb(async (db: Database) => {
@@ -208,18 +215,18 @@ export class MarketAgent {
 
     // Execute sequentially — prevents race conditions where multiple signals
     // pass safety checks before any trade is recorded
-    this.executeSignalsSequentially(signals).catch((err) => {
+    this.executeSignalsSequentially(signals, tickerCache).catch((err) => {
       console.error('[market-agent] Sequential execution error:', err);
     });
   }
 
-  private async executeSignalsSequentially(signals: MispricingSignal[]): Promise<void> {
+  private async executeSignalsSequentially(signals: MispricingSignal[], tickerCache?: Map<string, any>): Promise<void> {
     const tradeable = signals.filter(s => s.recommendedContracts > 0);
     if (tradeable.length === 0) return;
 
     for (const signal of tradeable) {
       try {
-        const traded = await this.executor.execute(signal, this.bankroll);
+        const traded = await this.executor.execute(signal, this.bankroll, tickerCache);
         if (traded) {
           // Refresh bankroll from Kalshi after each successful trade
           try {
@@ -295,6 +302,11 @@ export class MarketAgent {
 
   getEdgeThreshold(): number {
     return this.detector.getEdgeThreshold();
+  }
+
+  async runSettlement() {
+    if (!this.settlement) throw new Error('Settlement service not initialized');
+    return this.settlement.runNow();
   }
 
   killSwitch(): void {
@@ -513,6 +525,19 @@ export function createMarketAgentRouter(): Router {
       return;
     }
     res.json(agentInstance.getPerformanceStats());
+  });
+
+  router.post('/settlement/run', requireAuth, async (req: Request, res: Response) => {
+    if (!agentInstance) {
+      res.status(400).json({ status: 'error', message: 'Agent not running' });
+      return;
+    }
+    try {
+      const results = await agentInstance.runSettlement();
+      res.json({ status: 'ok', settled: results.length, results });
+    } catch (err) {
+      res.status(500).json({ status: 'error', message: (err as Error).message });
+    }
   });
 
   return router;
