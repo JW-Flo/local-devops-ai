@@ -8,7 +8,8 @@ process.on("uncaughtException", (err) => {
 
 import express from "express";
 import cors from "cors";
-import { z } from "zod";
+import {
+z } from "zod";
 import { config } from "./config.js";
 import { TaskSchema } from "./task-schema.js";
 import { TaskOrchestrator } from "./orchestrator.js";
@@ -54,6 +55,7 @@ import { fileURLToPath } from "url";
 import {
   initKPITracker, getKPIDashboard, getCycleHistory, resetKPIs,
 } from "./kpi-tracker.js";
+import { createWhatsAppRouter } from './whatsapp/index.js';
 
 const app = express();
 app.use(cors());
@@ -579,7 +581,8 @@ app.use("/home", homeRouter);
 
 // ── Market Agent (Weather Arbitrage) ──
 
-app.use("/market", createMarketAgentRouter());
+app.use("/market", createMarketAgentRouter())
+  app.use('/whatsapp', createWhatsAppRouter());
 app.use("/openclaw", createOpenClawRouter());
 
 // ── Self-Healer ──
