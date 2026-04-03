@@ -5,6 +5,7 @@ import { calculatePositionSize } from './kelly.js';
 import { bucketProbability, parseBucketFromTitle, getForecastConfidence } from './weather.js';
 import { withDb } from '../storage/sqlite.js';
 import type { TickerUpdate } from './kalshi-ws.js';
+import type { ParameterAdjustment } from './performance.js';
 
 const DEFAULT_EDGE_THRESHOLD = 0.15;  // 15 cents minimum edge (was 3¢ — 0/11 win rate; 10¢ still too loose)
 const THRESHOLD_EDGE_MULTIPLIER = 2.0; // threshold (T) markets require 2× edge (was 1.5×) — wider tails, more uncertainty
@@ -29,6 +30,7 @@ export class MispricingDetector {
   /** Configurable Kelly fraction — toggle between quarter (0.25) and half (0.50) */
   private kellyFraction = DEFAULT_KELLY_FRACTION;
   private edgeThreshold = DEFAULT_EDGE_THRESHOLD;
+  private excludedCities: Set<string> = new Set();
 
   setKellyFraction(f: number): void {
     this.kellyFraction = Math.max(0.05, Math.min(1.0, f));
@@ -41,6 +43,20 @@ export class MispricingDetector {
     console.log(`[mispricing] Edge threshold set to $${this.edgeThreshold}`);
   }
   getEdgeThreshold(): number { return this.edgeThreshold; }
+
+  excludeCity(city: string): void {
+    this.excludedCities.add(city);
+    console.log(`[mispricing] City excluded: ${city}`);
+  }
+
+  includeCity(city: string): void {
+    this.excludedCities.delete(city);
+    console.log(`[mispricing] City re-included: ${city}`);
+  }
+
+  getExcludedCities(): string[] {
+    return Array.from(this.excludedCities);
+  }
 
   detectAll(
     orderbook: OrderbookState,
@@ -131,6 +147,9 @@ export class MispricingDetector {
 
       const city = CITIES.find((c: CityConfig) => ticker.startsWith(c.seriesTicker));
       if (!city) continue;
+
+      // Skip excluded cities
+      if (this.excludedCities.has(city.name)) continue;
 
       // Match forecast by BOTH city AND target date from ticker
       let matchedForecast: DailyForecast | undefined;
@@ -253,6 +272,42 @@ export class MispricingDetector {
 
     this.currentSignals = deduped;
     return deduped;
+  }
+
+  /**
+   * Auto-tune parameters based on performance data.
+   * Only applies changes when confidence is medium or high and data supports it.
+   */
+  autoTune(adjustments: ParameterAdjustment[]): string[] {
+    const applied: string[] = [];
+    for (const adj of adjustments) {
+      if (adj.confidence === 'low') continue; // skip low-confidence recommendations
+
+      if (adj.parameter === 'EDGE_THRESHOLD') {
+        // Cap max auto-adjustment to 30¢ — don't let it go to 44¢ and filter everything
+        const capped = Math.min(adj.recommendedValue, 0.30);
+        if (Math.abs(capped - this.edgeThreshold) > 0.01) {
+          this.setEdgeThreshold(capped);
+          applied.push(`Edge threshold: ${(capped * 100).toFixed(0)}¢ (was ${(adj.currentValue * 100).toFixed(0)}¢) — ${adj.reason}`);
+        }
+      }
+
+      if (adj.parameter === 'KELLY_FRACTION') {
+        if (Math.abs(adj.recommendedValue - this.kellyFraction) > 0.01) {
+          this.setKellyFraction(adj.recommendedValue);
+          applied.push(`Kelly fraction: ${adj.recommendedValue.toFixed(2)} — ${adj.reason}`);
+        }
+      }
+
+      if (adj.parameter.startsWith('CITY_EXCLUDE_')) {
+        const city = adj.parameter.replace('CITY_EXCLUDE_', '');
+        if (!this.excludedCities.has(city)) {
+          this.excludeCity(city);
+          applied.push(`Excluded ${city} — ${adj.reason}`);
+        }
+      }
+    }
+    return applied;
   }
 
   private logSignalIfNew(
