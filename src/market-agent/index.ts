@@ -12,9 +12,6 @@ import { initNotifications, notify } from './notifications.js';
 import { DailyForecast, MispricingSignal } from './types.js';
 import { SettlementService } from './settlement.js';
 
-// CITIES now imported from types.ts — single source of truth
-// Remove this local duplicate
-
 export class MarketAgent {
   private noaa: NOAAClient;
   private kalshiRest: KalshiRest;
@@ -33,7 +30,8 @@ export class MarketAgent {
   private errors: string[] = [];
   private lastScanTime = 0;
   private warmedUp = false;
-  private readonly SCAN_COOLDOWN_MS = 30_000; // throttle orderbook-triggered scans
+  private scanInProgress = false;
+  private readonly SCAN_COOLDOWN_MS = 30_000;
 
   constructor(paperMode = true) {
     this.noaa = new NOAAClient();
@@ -82,10 +80,8 @@ export class MarketAgent {
       this.lastError = null;
       console.log(`Initial balance: $${this.bankroll.toFixed(2)}`);
 
-      // Sync existing positions so safety guard and dedup survive restarts
       await this.syncPositionsFromKalshi();
 
-      // Start settlement service to resolve completed trades
       this.settlement = new SettlementService(this.kalshiRest, this.executor.getPerformance(), this.safety);
       this.settlement.start();
     } catch (err) {
@@ -94,11 +90,10 @@ export class MarketAgent {
       this.lastError = `Kalshi auth failed: ${msg}`;
       this.errors.push(this.lastError);
       console.error(`[market-agent] ${this.lastError}`);
-      // Still start NOAA pipeline so forecasts flow, but skip Kalshi feed
       console.warn('[market-agent] Running in NOAA-only mode (no Kalshi connection)');
       await this.pollNOAA();
       this.noaaTimer = setInterval(() => this.pollNOAA(), 30 * 60 * 1000);
-      return; // Don't start WS feed or market refresh without auth
+      return;
     }
 
     await this.feed.start();
@@ -107,14 +102,12 @@ export class MarketAgent {
       this.onOrderbookUpdate(ticker);
     });
 
-    // Refresh market meta FIRST so runFullScan has tickers to work with
     await this.refreshMarketMeta();
     setInterval(() => this.refreshMarketMeta(), 15 * 60 * 1000);
 
     await this.pollNOAA();
     this.noaaTimer = setInterval(() => this.pollNOAA(), 30 * 60 * 1000);
 
-    // Periodic bankroll refresh — catches external transfers, fees, settlements
     this.bankrollTimer = setInterval(async () => {
       try {
         const prev = this.bankroll;
@@ -125,9 +118,8 @@ export class MarketAgent {
       } catch (err) {
         console.warn('[market-agent] Bankroll sync failed:', (err as Error).message);
       }
-    }, 30 * 60 * 1000); // every 30 minutes
+    }, 30 * 60 * 1000);
 
-    // Allow 30s for WS ticker data to warm the cache before first scan
     setTimeout(() => {
       this.warmedUp = true;
       const tickerCount = this.feed.getTickerSnapshot().size;
@@ -173,10 +165,9 @@ export class MarketAgent {
       let synced = 0;
       for (const pos of positions) {
         if (pos.position > 0 && pos.ticker.startsWith('KXHIGH')) {
-          // Reconstruct approximate avg price from exposure
           const avgPrice = pos.market_exposure > 0
             ? pos.market_exposure / pos.position / 100
-            : 0.10; // fallback estimate
+            : 0.10;
           this.safety.recordTrade(pos.ticker, pos.position, avgPrice);
           this.executor.markAsExecuted(pos.ticker);
           synced++;
@@ -207,7 +198,6 @@ export class MarketAgent {
     if (!ticker.startsWith('KXHIGH')) return;
     const forecasts = this.noaa.getLatestForecasts();
     if (forecasts.size === 0) return;
-    // Throttle: orderbook deltas can arrive hundreds/sec — cap to once per 30s
     const now = Date.now();
     if (now - this.lastScanTime < this.SCAN_COOLDOWN_MS) return;
     this.runFullScan();
@@ -216,24 +206,28 @@ export class MarketAgent {
   private runFullScan(): void {
     if (this.safety.isKilled()) return;
     if (this.bankroll <= 0) return;
-    if (this.marketMeta.size === 0) return; // no markets yet — don't poison cooldown
+    if (this.marketMeta.size === 0) return;
+    // Prevent concurrent scan execution — previous scan must finish before next starts
+    if (this.scanInProgress) return;
 
     const forecasts = this.noaa.getLatestForecasts();
     const orderbook = this.feed.getOrderbook();
     const tickerCache = this.feed.getTickerSnapshot();
 
-    // Need at least some price data — either from WS ticker channel or REST orderbook
     const hasOrderbookData = orderbook.getBookCount() > 0;
     if (tickerCache.size === 0 && !hasOrderbookData) return;
     this.lastScanTime = Date.now();
 
     const signals = this.detector.detectAll(orderbook, forecasts, this.bankroll, this.marketMeta, tickerCache);
 
-    // Execute sequentially — prevents race conditions where multiple signals
-    // pass safety checks before any trade is recorded
-    this.executeSignalsSequentially(signals, tickerCache).catch((err) => {
-      console.error('[market-agent] Sequential execution error:', err);
-    });
+    this.scanInProgress = true;
+    this.executeSignalsSequentially(signals, tickerCache)
+      .catch((err) => {
+        console.error('[market-agent] Sequential execution error:', err);
+      })
+      .finally(() => {
+        this.scanInProgress = false;
+      });
   }
 
   private async executeSignalsSequentially(signals: MispricingSignal[], tickerCache?: Map<string, any>): Promise<void> {
@@ -244,7 +238,6 @@ export class MarketAgent {
       try {
         const traded = await this.executor.execute(signal, this.bankroll, tickerCache);
         if (traded) {
-          // Refresh bankroll from Kalshi after each successful trade
           try {
             this.bankroll = await this.kalshiRest.getBalance();
           } catch (err) {
@@ -337,18 +330,14 @@ export class MarketAgent {
 
 let agentInstance: MarketAgent | null = null;
 
-// ── Auth + Rate Limit Middleware ──
-
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 10;
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
 function requireAuth(req: Request, res: Response, next: () => void): void {
-  // Local-only gateway: allow if request is from loopback
   const ip = req.ip ?? req.socket.remoteAddress ?? '';
   const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
 
-  // If GH_PAT is configured, require it as Bearer token for non-local requests
   if (!isLocal && config.ghPat) {
     const auth = req.headers.authorization;
     if (!auth || auth !== `Bearer ${config.ghPat}`) {
@@ -357,14 +346,12 @@ function requireAuth(req: Request, res: Response, next: () => void): void {
     }
   }
 
-  // Rate limit mutation endpoints (with cleanup to prevent unbounded growth)
   const key = `${ip}:${req.path}`;
   const now = Date.now();
   let entry = rateLimitMap.get(key);
   if (!entry || now > entry.resetAt) {
     entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
     rateLimitMap.set(key, entry);
-    // Periodic cleanup: purge expired entries when map grows large
     if (rateLimitMap.size > 100) {
       for (const [k, v] of rateLimitMap) {
         if (now > v.resetAt) rateLimitMap.delete(k);
@@ -456,7 +443,6 @@ export function createMarketAgentRouter(): Router {
         return results;
       }, { db: 'market-agent' });
 
-      // Also fetch summary counts
       const summary = await withDb(async (db: Database) => {
         const stmt = db.prepare(
           `SELECT event_type, COUNT(*) as count FROM events GROUP BY event_type ORDER BY count DESC`
@@ -499,7 +485,7 @@ export function createMarketAgentRouter(): Router {
       res.status(400).json({ status: 'error', message: 'Agent not running' });
       return;
     }
-    const enabled = req.body?.enabled !== false; // default true
+    const enabled = req.body?.enabled !== false;
     agentInstance.setPaperMode(enabled);
     res.json({ status: 'ok', paperMode: enabled });
   });
@@ -511,7 +497,7 @@ export function createMarketAgentRouter(): Router {
     }
     const fraction = Number(req.body?.fraction);
     if (!fraction || fraction < 0.05 || fraction > 1.0) {
-      res.status(400).json({ status: 'error', message: 'fraction must be 0.05-1.0 (0.25=quarter, 0.50=half)' });
+      res.status(400).json({ status: 'error', message: 'fraction must be 0.05-1.0' });
       return;
     }
     agentInstance.setKellyFraction(fraction);
@@ -524,8 +510,8 @@ export function createMarketAgentRouter(): Router {
       return;
     }
     const threshold = Number(req.body?.threshold);
-    if (!threshold || threshold < 0.01 || threshold > 0.20) {
-      res.status(400).json({ status: 'error', message: 'threshold must be 0.01-0.20' });
+    if (!threshold || threshold < 0.01 || threshold > 0.50) {
+      res.status(400).json({ status: 'error', message: 'threshold must be 0.01-0.50' });
       return;
     }
     agentInstance.setEdgeThreshold(threshold);
@@ -538,7 +524,7 @@ export function createMarketAgentRouter(): Router {
       return;
     }
     agentInstance.setPaperMode(false);
-    res.json({ status: 'ok', paperMode: false, warning: 'LIVE TRADING ENABLED — real money at risk' });
+    res.json({ status: 'ok', paperMode: false, warning: 'LIVE TRADING ENABLED' });
   });
 
   router.get('/performance', (req: Request, res: Response) => {

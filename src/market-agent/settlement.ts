@@ -115,7 +115,7 @@ export class SettlementService {
           const pnl = this.calculatePnl(outcome, t.contracts, t.fillPrice);
 
           // Record settlement
-          await this.performance.recordSettlement(t.ticker, outcome, 0, pnl);
+          await this.performance.recordSettlement(t.ticker, outcome, null, pnl);
           this.safety.recordSettlement(t.ticker, pnl);
 
           // Log to events table

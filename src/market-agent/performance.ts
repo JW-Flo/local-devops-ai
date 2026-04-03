@@ -153,11 +153,11 @@ export class PerformanceTracker {
     }, { db: 'market-agent', persist: true });
   }
 
-  async recordSettlement(ticker: string, outcome: 'win' | 'loss', actualHighF: number, pnl: number): Promise<void> {
+  async recordSettlement(ticker: string, outcome: 'win' | 'loss', actualHighF: number | null, pnl: number): Promise<void> {
     const trade = this.trades.find(t => t.ticker === ticker && !t.outcome);
     if (trade) {
       trade.outcome = outcome;
-      trade.actualHighF = actualHighF;
+      trade.actualHighF = actualHighF || undefined;
       trade.pnl = pnl;
     }
 
