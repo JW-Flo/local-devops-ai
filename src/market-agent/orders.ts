@@ -46,7 +46,22 @@ export class OrderExecutor {
     this.executedTickers.set(ticker, Date.now());
   }
 
+  /** Prune stale entries from caches to prevent unbounded memory growth */
+  private pruneStaleEntries(): void {
+    const ONE_DAY = 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - ONE_DAY;
+    for (const [ticker, ts] of this.executedTickers) {
+      if (ts < cutoff) this.executedTickers.delete(ticker);
+    }
+    // Validation cache: clear entirely if > 200 entries (deterministic results don't need long caching)
+    if (this.validationCache.size > 200) {
+      this.validationCache.clear();
+    }
+  }
+
   async execute(signal: MispricingSignal, bankroll: number, tickerCache?: Map<string, TickerUpdate>): Promise<boolean> {
+    this.pruneStaleEntries();
+
     if (this.pendingOrders.has(signal.ticker)) {
       console.log(`Order already pending for ${signal.ticker}`);
       return false;

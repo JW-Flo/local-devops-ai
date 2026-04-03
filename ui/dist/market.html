@@ -12,24 +12,30 @@
   --green: #22c55e; --green-bg: rgba(34,197,94,.12);
   --red: #ef4444; --red-bg: rgba(239,68,68,.12);
   --yellow: #eab308; --yellow-bg: rgba(234,179,8,.12);
+  --orange: #f97316; --orange-bg: rgba(249,115,22,.12);
+  --blue: #3b82f6; --blue-bg: rgba(59,130,246,.12);
   --radius: 10px;
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 body { font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
   background:var(--bg); color:var(--text); line-height:1.6; min-height:100vh; }
 a { color:var(--accent); text-decoration:none; }
-.container { max-width:1200px; margin:0 auto; padding:20px; }
-.header { display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; }
+.container { max-width:1400px; margin:0 auto; padding:20px; }
+.header { display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; flex-wrap:wrap; gap:12px; }
 .header h1 { font-size:1.5rem; font-weight:700; }
-.badge { padding:4px 10px; border-radius:12px; font-size:.75rem; font-weight:600; }
+.badge { padding:4px 10px; border-radius:12px; font-size:.75rem; font-weight:600; display:inline-block; }
 .badge-green { background:var(--green-bg); color:var(--green); }
 .badge-red { background:var(--red-bg); color:var(--red); }
 .badge-yellow { background:var(--yellow-bg); color:var(--yellow); }
+.badge-orange { background:var(--orange-bg); color:var(--orange); }
+.badge-blue { background:var(--blue-bg); color:var(--blue); }
 .badge-muted { background:var(--surface2); color:var(--text-muted); }
 .grid { display:grid; gap:16px; margin-bottom:24px; }
 .grid-4 { grid-template-columns: repeat(4, 1fr); }
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
 .grid-2 { grid-template-columns: repeat(2, 1fr); }
-@media (max-width:768px) { .grid-4,.grid-2 { grid-template-columns:1fr; } }
+@media (max-width:900px) { .grid-4,.grid-3 { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width:600px) { .grid-4,.grid-3,.grid-2 { grid-template-columns:1fr; } }
 .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:20px; }
 .card h3 { font-size:.8rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:8px; }
 .card .value { font-size:1.6rem; font-weight:700; }
@@ -37,13 +43,21 @@ a { color:var(--accent); text-decoration:none; }
 .btn { padding:8px 16px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface2);
   color:var(--text); cursor:pointer; font-size:.85rem; font-weight:500; transition:all .15s; }
 .btn:hover { background:var(--accent); border-color:var(--accent); }
+.btn:disabled { opacity:.4; cursor:not-allowed; }
+.btn-sm { padding:5px 12px; font-size:.78rem; }
 .btn-danger { border-color:var(--red); color:var(--red); }
 .btn-danger:hover { background:var(--red); color:#fff; }
 .btn-green { border-color:var(--green); color:var(--green); }
 .btn-green:hover { background:var(--green); color:#fff; }
+.btn-yellow { border-color:var(--yellow); color:var(--yellow); }
+.btn-yellow:hover { background:var(--yellow); color:#fff; }
+.btn-orange { border-color:var(--orange); color:var(--orange); }
+.btn-orange:hover { background:var(--orange); color:#fff; }
+.btn-blue { border-color:var(--blue); color:var(--blue); }
+.btn-blue:hover { background:var(--blue); color:#fff; }
 table { width:100%; border-collapse:collapse; }
 th { text-align:left; font-size:.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;
-  padding:10px 12px; border-bottom:1px solid var(--border); }
+  padding:10px 12px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--surface); }
 td { padding:10px 12px; border-bottom:1px solid var(--border); font-size:.85rem; }
 tr:hover { background:var(--surface2); }
 .mono { font-family:'JetBrains Mono','Fira Code',monospace; }
@@ -53,6 +67,25 @@ tr:hover { background:var(--surface2); }
 .nav a { padding:6px 14px; border-radius:var(--radius); background:var(--surface); border:1px solid var(--border);
   color:var(--text-muted); font-size:.85rem; }
 .nav a.active, .nav a:hover { background:var(--accent); color:#fff; border-color:var(--accent); }
+/* Control panel */
+.control-panel { display:flex; flex-wrap:wrap; gap:16px; align-items:flex-end; }
+.control-group { display:flex; flex-direction:column; gap:4px; }
+.control-group label { font-size:.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.control-group .ctrl-row { display:flex; gap:6px; align-items:center; }
+.control-group input[type=range] { width:120px; accent-color:var(--accent); }
+.control-group input[type=number] { width:70px; padding:5px 8px; border-radius:6px; border:1px solid var(--border);
+  background:var(--bg); color:var(--text); font-size:.85rem; font-family:inherit; }
+.control-group .val { font-size:.85rem; font-weight:600; min-width:40px; text-align:right; color:var(--accent); }
+.control-divider { width:1px; height:40px; background:var(--border); margin:0 4px; }
+/* Scrollable table containers */
+.table-scroll { max-height:400px; overflow-y:auto; }
+/* Toast */
+.toast { position:fixed; bottom:24px; right:24px; padding:12px 20px; border-radius:var(--radius);
+  background:var(--surface2); border:1px solid var(--border); font-size:.85rem; z-index:100;
+  opacity:0; transform:translateY(10px); transition:all .3s; pointer-events:none; }
+.toast.show { opacity:1; transform:translateY(0); pointer-events:auto; }
+.toast.success { border-color:var(--green); color:var(--green); }
+.toast.error { border-color:var(--red); color:var(--red); }
 </style>
 </head>
 <body>
@@ -62,62 +95,128 @@ tr:hover { background:var(--surface2); }
     <a href="/finance.html">Finance</a>
     <a href="/market.html" class="active">Market Agent</a>
   </div>
+
+  <!-- Header + Primary Controls -->
   <div class="header">
     <h1>Weather Arbitrage Agent</h1>
-    <div id="controls">
-      <button class="btn btn-green" onclick="startAgent()">Start</button>
-      <button class="btn" onclick="stopAgent()">Stop</button>
-      <button class="btn" onclick="setPaperMode(true)">Paper Mode</button>
-      <button class="btn btn-green" onclick="goLive()">Go Live</button>
-      <button class="btn btn-danger" onclick="killSwitch()">KILL</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn btn-green" onclick="startAgent()" id="btn-start">Start</button>
+      <button class="btn" onclick="stopAgent()" id="btn-stop">Stop</button>
+      <button class="btn btn-yellow" onclick="setPaperMode(true)" id="btn-paper">Paper Mode</button>
+      <button class="btn btn-orange" onclick="goLive()" id="btn-live">Go Live</button>
+      <button class="btn btn-blue" onclick="resetSafety()" id="btn-reset">Reset Safety</button>
+      <button class="btn btn-danger" onclick="killSwitch()" id="btn-kill">KILL</button>
     </div>
   </div>
   <div id="status-bar" style="margin-bottom:16px;"></div>
 
   <!-- KPI Cards -->
   <div class="grid grid-4" id="kpi-cards">
-    <div class="card"><h3>Status</h3><div class="value" id="kpi-status">--</div><div class="sub" id="kpi-uptime"></div></div>
-    <div class="card"><h3>Balance</h3><div class="value mono" id="kpi-balance">--</div><div class="sub" id="kpi-pnl"></div></div>
-    <div class="card"><h3>Signals</h3><div class="value" id="kpi-signals">--</div><div class="sub" id="kpi-trades"></div></div>
+    <div class="card"><h3>Status</h3><div class="value" id="kpi-status">--</div><div class="sub" id="kpi-mode"></div></div>
+    <div class="card"><h3>Balance</h3><div class="value mono" id="kpi-balance">--</div><div class="sub" id="kpi-exposure"></div></div>
+    <div class="card"><h3>Signals</h3><div class="value" id="kpi-signals">--</div><div class="sub" id="kpi-signal-breakdown"></div></div>
     <div class="card"><h3>Performance</h3><div class="value" id="kpi-perf">--</div><div class="sub" id="kpi-perf-sub"></div></div>
   </div>
 
-  <!-- Forecasts + Signals -->
+  <!-- Control Panel -->
+  <div class="card" style="margin-bottom:24px;">
+    <h3>Agent Controls</h3>
+    <div class="control-panel" style="margin-top:8px;">
+      <div class="control-group">
+        <label>Kelly Fraction</label>
+        <div class="ctrl-row">
+          <input type="range" id="kelly-slider" min="5" max="100" value="10" oninput="document.getElementById('kelly-val').textContent=(this.value/100).toFixed(2)">
+          <span class="val mono" id="kelly-val">0.10</span>
+          <button class="btn btn-sm" onclick="setKelly()">Set</button>
+        </div>
+      </div>
+      <div class="control-divider"></div>
+      <div class="control-group">
+        <label>Edge Threshold</label>
+        <div class="ctrl-row">
+          <input type="range" id="edge-slider" min="1" max="50" value="15" oninput="document.getElementById('edge-val').textContent=(this.value)+'&cent;'">
+          <span class="val mono" id="edge-val">15&cent;</span>
+          <button class="btn btn-sm" onclick="setEdge()">Set</button>
+        </div>
+      </div>
+      <div class="control-divider"></div>
+      <div class="control-group">
+        <label>Settlement</label>
+        <div class="ctrl-row">
+          <button class="btn btn-sm btn-blue" onclick="runSettlement()" id="btn-settle">Run Now</button>
+        </div>
+      </div>
+      <div class="control-divider"></div>
+      <div class="control-group">
+        <label>Config</label>
+        <div class="ctrl-row">
+          <span class="mono" style="font-size:.8rem;" id="config-display">--</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Safety + City Breakdown -->
   <div class="grid grid-2">
+    <div class="card">
+      <h3>Safety Guard</h3>
+      <div id="safety-panel" style="font-size:.85rem;">--</div>
+    </div>
+    <div class="card">
+      <h3>City Performance</h3>
+      <table>
+        <thead><tr><th>City</th><th>Trades</th><th>Wins</th><th>Win %</th><th>P&amp;L</th></tr></thead>
+        <tbody id="city-table"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Forecasts + Signals -->
+  <div class="grid grid-2" style="margin-top:16px;">
     <div class="card">
       <h3>City Forecasts</h3>
       <table>
-        <thead><tr><th>City</th><th>High °F</th><th>Date</th><th>Series</th><th>Updated</th></tr></thead>
+        <thead><tr><th>City</th><th>High &deg;F</th><th>Date</th><th>Series</th><th>Updated</th></tr></thead>
         <tbody id="forecast-table"></tbody>
       </table>
     </div>
     <div class="card">
       <h3>Active Signals</h3>
+      <div class="table-scroll">
       <table>
-        <thead><tr><th>Ticker</th><th>Edge</th><th>Kelly %</th><th>Prob / Price</th><th>Status</th></tr></thead>
+        <thead><tr><th>Ticker</th><th>Side</th><th>Edge</th><th>Kelly %</th><th>Prob / Price</th><th>Ctrs</th></tr></thead>
         <tbody id="signals-table"></tbody>
       </table>
+      </div>
     </div>
   </div>
 
-  <!-- Paper Trade History -->
+  <!-- Trade History -->
   <div class="card" style="margin-top:16px;">
-    <h3>Trade History (Paper + Live)</h3>
+    <h3>Trade History</h3>
+    <div class="table-scroll" style="max-height:500px;">
     <table>
-      <thead><tr><th>Time</th><th>Ticker</th><th>City</th><th>Side</th><th>Prob</th><th>Price</th><th>Edge</th><th>Contracts</th><th>Outcome</th><th>P&amp;L</th></tr></thead>
+      <thead><tr><th>Time</th><th>Ticker</th><th>City</th><th>Side</th><th>Prob</th><th>Price</th><th>Edge</th><th>Ctrs</th><th>Outcome</th><th>P&amp;L</th></tr></thead>
       <tbody id="trades-table"></tbody>
     </table>
-    <div id="no-trades" style="padding:20px;text-align:center;color:var(--text-muted);">No paper trades yet — waiting for mispricing detection</div>
+    </div>
+    <div id="no-trades" style="padding:20px;text-align:center;color:var(--text-muted);">No trades yet</div>
   </div>
 
   <!-- Event Log -->
   <div class="card" style="margin-top:16px;">
-    <h3>Live Event Log</h3>
-    <div id="event-log" style="font-family:'JetBrains Mono','Fira Code',monospace;font-size:.8rem;max-height:200px;overflow-y:auto;padding:8px;background:var(--bg);border-radius:6px;">
+    <h3 style="display:flex;justify-content:space-between;align-items:center;">
+      Live Event Log
+      <button class="btn btn-sm" onclick="clearLog()">Clear</button>
+    </h3>
+    <div id="event-log" style="font-family:'JetBrains Mono','Fira Code',monospace;font-size:.78rem;max-height:240px;overflow-y:auto;padding:8px;background:var(--bg);border-radius:6px;margin-top:8px;">
       <div style="color:var(--text-muted);">Connecting...</div>
     </div>
   </div>
 </div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
 
 <script>
 const API = window.location.origin;
@@ -130,6 +229,13 @@ async function api(path, opts = {}) {
 }
 
 let refreshTimer = null;
+
+function toast(msg, type = 'success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `toast show ${type}`;
+  setTimeout(() => el.className = 'toast', 3000);
+}
 
 async function refresh() {
   try {
@@ -146,24 +252,30 @@ async function refresh() {
     updateSignals(signalData.signals || []);
     updateStatusBar(d);
     updateTrades(tradesData.trades || []);
+    updateControls(d);
+    updateSafety(d.safety || {});
+    updateCityBreakdown(d.performance?.cityBreakdown || {});
 
-    // Populate event log from recent events (on first load or when log is sparse)
+    // Seed event log from recent events (first load only)
     const allEvents = eventsData.events || [];
     if (allEvents.length > 0 && !window._eventsSeeded) {
       window._eventsSeeded = true;
       allEvents.slice().reverse().forEach(e => {
         const typeMap = {
-          mispricing_detected: 'signal', trade_executed: 'trade', trade_rejected: 'trade',
-          forecast_update: 'forecast', bot_started: 'start', bot_stopped: 'stop',
-          ws_connected: 'info', ws_disconnected: 'error', orderbook_snapshot: 'info',
+          mispricing_detected: 'signal', trade_executed: 'trade', paper_trade: 'paper',
+          trade_rejected: 'rejected', forecast_update: 'forecast', bot_started: 'start',
+          bot_stopped: 'stop', ws_connected: 'info', ws_disconnected: 'error',
+          settlement: 'settle', orderbook_snapshot: 'info',
         };
         const p = e.payload || {};
         let msg = `${e.event_type}`;
         if (e.market_ticker) msg += ` ${e.market_ticker}`;
         if (p.edge) msg += ` edge=$${Number(p.edge).toFixed(3)}`;
         if (p.city) msg += ` ${p.city}`;
-        if (p.forecast_high_f) msg += ` ${p.forecast_high_f}°F`;
-        if (p.reason) msg += ` — ${p.reason.slice(0, 60)}`;
+        if (p.forecast_high_f) msg += ` ${p.forecast_high_f}\u00b0F`;
+        if (p.reason) msg += ` \u2014 ${String(p.reason).slice(0, 60)}`;
+        if (p.outcome) msg += ` ${p.outcome}`;
+        if (p.pnl != null) msg += ` P&L $${Number(p.pnl).toFixed(2)}`;
         logEvent(typeMap[e.event_type] || 'info', msg, e.timestamp_ms);
       });
     }
@@ -182,8 +294,14 @@ function updateStatusBar(d) {
   const ws = d.wsConnected
     ? '<span class="badge badge-green">WS Connected</span>'
     : '<span class="badge badge-red">WS Disconnected</span>';
+  const auth = d.authenticated
+    ? '<span class="badge badge-green">Authenticated</span>'
+    : '<span class="badge badge-red">Not Authenticated</span>';
   const mkts = `<span class="badge badge-muted">${d.marketCount || 0} markets</span>`;
-  bar.innerHTML = [mode, ws, mkts].join(' ');
+  const sigs = d.signalBreakdown
+    ? `<span class="badge badge-blue">${d.signalBreakdown.yesBuy || 0} YES + ${d.signalBreakdown.noBuy || 0} NO signals</span>`
+    : '';
+  bar.innerHTML = [mode, auth, ws, mkts, sigs].join(' ');
 }
 
 function updateKPIs(d, summary) {
@@ -193,28 +311,38 @@ function updateKPIs(d, summary) {
   const killed = safety.killed || d.killSwitch;
   statusEl.textContent = killed ? 'KILLED' : running ? 'Running' : 'Stopped';
   statusEl.className = 'value ' + (killed ? 'negative' : running ? 'positive' : '');
-  document.getElementById('kpi-uptime').textContent = d.dryRun ? 'Dry Run' : '';
+
+  const modeEl = document.getElementById('kpi-mode');
+  if (d.paperMode != null) {
+    modeEl.innerHTML = d.paperMode
+      ? '<span class="badge badge-yellow">Paper</span>'
+      : '<span class="badge badge-red">LIVE</span>';
+  } else {
+    modeEl.textContent = '';
+  }
 
   const balance = d.bankroll ?? d.balance;
   document.getElementById('kpi-balance').textContent = balance != null ? '$' + Number(balance).toFixed(2) : '--';
-  const pnl = safety.dailyPnL || d.dailyPnL || 0;
-  const pnlEl = document.getElementById('kpi-pnl');
-  pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + Number(pnl).toFixed(2) + ' today';
-  pnlEl.className = 'sub ' + (pnl >= 0 ? 'positive' : 'negative');
+  const expEl = document.getElementById('kpi-exposure');
+  const exposure = safety.totalExposure || 0;
+  const positions = safety.positionCount || 0;
+  expEl.textContent = `Exposure: $${Number(exposure).toFixed(2)} \u00b7 ${positions} positions`;
 
   document.getElementById('kpi-signals').textContent = d.signals ?? d.signalCount ?? '--';
   const mispricings = (summary && summary.mispricing_detected) || 0;
   const paperCount = (summary && summary.paper_trade) || 0;
-  document.getElementById('kpi-trades').textContent = mispricings + ' detections · ' + paperCount + ' paper trades';
+  const realCount = (summary && summary.trade_executed) || 0;
+  document.getElementById('kpi-signal-breakdown').textContent =
+    `${mispricings} detections \u00b7 ${paperCount} paper \u00b7 ${realCount} live`;
 
   const perf = d.performance || {};
   const perfEl = document.getElementById('kpi-perf');
   const perfSubEl = document.getElementById('kpi-perf-sub');
   if (perf.totalTrades > 0) {
     const wr = perf.settled > 0 ? (perf.winRate * 100).toFixed(0) + '% win' : 'unsettled';
-    perfEl.textContent = perf.totalTrades + ' trades';
+    perfEl.textContent = wr;
     const pnlStr = perf.totalPnL !== 0 ? (perf.totalPnL >= 0 ? '+' : '') + '$' + perf.totalPnL.toFixed(2) : 'pending';
-    perfSubEl.textContent = 'Win rate: ' + wr + ' · P&L: ' + pnlStr;
+    perfSubEl.textContent = `${perf.totalTrades} trades \u00b7 ${perf.wins}W/${perf.losses}L \u00b7 P&L: ${pnlStr}`;
     perfSubEl.className = 'sub ' + (perf.totalPnL >= 0 ? 'positive' : 'negative');
   } else {
     perfEl.textContent = '--';
@@ -222,38 +350,101 @@ function updateKPIs(d, summary) {
   }
 }
 
+function updateControls(d) {
+  // Sync slider values to current server state
+  if (d.kellyFraction != null) {
+    const slider = document.getElementById('kelly-slider');
+    slider.value = Math.round(d.kellyFraction * 100);
+    document.getElementById('kelly-val').textContent = d.kellyFraction.toFixed(2);
+  }
+  if (d.edgeThreshold != null) {
+    const slider = document.getElementById('edge-slider');
+    slider.value = Math.round(d.edgeThreshold * 100);
+    document.getElementById('edge-val').innerHTML = Math.round(d.edgeThreshold * 100) + '&cent;';
+  }
+
+  const configEl = document.getElementById('config-display');
+  configEl.innerHTML = d.running
+    ? `Kelly: <strong>${(d.kellyFraction || 0).toFixed(2)}</strong> &middot; Edge: <strong>${Math.round((d.edgeThreshold || 0) * 100)}&cent;</strong>`
+    : '<span style="color:var(--text-muted)">Agent stopped</span>';
+
+  // Button states
+  document.getElementById('btn-start').disabled = d.running;
+  document.getElementById('btn-stop').disabled = !d.running;
+  document.getElementById('btn-paper').disabled = !d.running || d.paperMode;
+  document.getElementById('btn-live').disabled = !d.running || !d.paperMode;
+  document.getElementById('btn-kill').disabled = !d.running;
+  document.getElementById('btn-reset').disabled = !d.running;
+  document.getElementById('btn-settle').disabled = !d.running;
+}
+
+function updateSafety(safety) {
+  const panel = document.getElementById('safety-panel');
+  const killed = safety.killed;
+  const cities = (safety.activeCities || []).join(', ') || 'none';
+  panel.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <div>Kill Switch: <strong class="${killed ? 'negative' : 'positive'}">${killed ? 'ACTIVE' : 'OFF'}</strong></div>
+      <div>Daily P&L: <strong class="${(safety.dailyPnL || 0) >= 0 ? 'positive' : 'negative'}">$${(safety.dailyPnL || 0).toFixed(2)}</strong></div>
+      <div>Total Exposure: <strong class="mono">$${(safety.totalExposure || 0).toFixed(2)}</strong></div>
+      <div>Positions: <strong>${safety.positionCount || 0}</strong></div>
+      <div style="grid-column:span 2;">Active Cities: <strong>${cities}</strong> <span style="color:var(--text-muted)">(max 4)</span></div>
+    </div>`;
+}
+
+function updateCityBreakdown(breakdown) {
+  const tbody = document.getElementById('city-table');
+  const entries = Object.entries(breakdown);
+  if (!entries.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No data yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = entries.map(([city, s]) => {
+    const winPct = s.trades > 0 ? ((s.wins / s.trades) * 100).toFixed(0) : '0';
+    const pnlClass = s.pnl > 0 ? 'positive' : s.pnl < 0 ? 'negative' : '';
+    return `<tr>
+      <td><strong>${city}</strong></td>
+      <td class="mono">${s.trades}</td>
+      <td class="mono">${s.wins}</td>
+      <td class="mono">${winPct}%</td>
+      <td class="mono ${pnlClass}">${s.pnl != null ? '$' + Number(s.pnl).toFixed(2) : '--'}</td>
+    </tr>`;
+  }).join('');
+}
+
 function updateForecasts(forecasts) {
   const tbody = document.getElementById('forecast-table');
   if (!forecasts.length) { tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No forecasts</td></tr>'; return; }
   tbody.innerHTML = forecasts.map(f => {
     const temp = f.highF ?? '--';
-    const tempIcon = temp >= 80 ? '🔴' : temp >= 60 ? '🟡' : '🔵';
+    const tempColor = temp >= 85 ? 'var(--red)' : temp >= 70 ? 'var(--orange)' : temp >= 55 ? 'var(--yellow)' : 'var(--blue)';
     const date = f.targetDate || '--';
     return `<tr>
       <td><strong>${f.city}</strong></td>
-      <td class="mono">${tempIcon} ${temp}°</td>
+      <td class="mono" style="color:${tempColor}">${temp}\u00b0</td>
       <td>${date}</td>
       <td><span class="badge badge-muted">${f.seriesTicker || '--'}</span></td>
-      <td style="color:var(--text-muted)">${f.forecastTime ? new Date(f.forecastTime).toLocaleTimeString() : '--'}</td>
+      <td style="color:var(--text-muted);font-size:.78rem">${f.forecastTime ? new Date(f.forecastTime).toLocaleTimeString() : '--'}</td>
     </tr>`;
   }).join('');
 }
 
 function updateSignals(signals) {
   const tbody = document.getElementById('signals-table');
-  if (!signals.length) { tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No active signals</td></tr>'; return; }
+  if (!signals.length) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No active signals</td></tr>'; return; }
   tbody.innerHTML = signals.map(s => {
     const edge = s.edge || 0;
-    const kelly = s.kellyFraction || s.kellyPct || s.kelly || 0;
+    const kelly = s.kellyFraction || 0;
     const contracts = s.recommendedContracts || 0;
-    const city = s.city || '';
-    const prob = s.noaaConfidence || 0;
+    const side = (s.side || 'yes').toUpperCase();
+    const sideClass = s.side === 'yes' ? 'badge-green' : 'badge-orange';
     return `<tr>
-      <td class="mono" title="${city} ${s.targetDate || ''}">${s.ticker || '--'}</td>
-      <td class="mono ${edge > 0 ? 'positive' : 'negative'}">${(edge*100).toFixed(1)}¢</td>
+      <td class="mono" style="font-size:.78rem" title="${s.city} ${s.targetDate || ''}">${s.ticker || '--'}</td>
+      <td><span class="badge ${sideClass}">${side}</span></td>
+      <td class="mono positive">${(edge*100).toFixed(1)}\u00a2</td>
       <td class="mono">${(kelly*100).toFixed(1)}%</td>
-      <td class="mono">${(prob*100).toFixed(0)}% @ $${(s.marketPrice||0).toFixed(2)}</td>
-      <td><span class="badge ${contracts > 0 ? 'badge-green' : 'badge-yellow'}">${contracts > 0 ? contracts + ' ctrs' : 'signal only'}</span></td>
+      <td class="mono">${((s.noaaConfidence||0)*100).toFixed(0)}% @ $${(s.marketPrice||0).toFixed(2)}</td>
+      <td class="mono">${contracts}</td>
     </tr>`;
   }).join('');
 }
@@ -267,15 +458,16 @@ function updateTrades(trades) {
     const time = t.created_at ? new Date(t.created_at).toLocaleString() : '--';
     const prob = t.predicted_prob != null ? (t.predicted_prob * 100).toFixed(0) + '%' : '--';
     const price = t.fill_price != null ? '$' + Number(t.fill_price).toFixed(2) : '--';
-    const edge = t.edge != null ? (t.edge * 100).toFixed(1) + '¢' : '--';
+    const edge = t.edge != null ? (t.edge * 100).toFixed(1) + '\u00a2' : '--';
     const side = (t.side || 'yes').toUpperCase();
-    const sideClass = t.side === 'yes' ? 'badge-green' : 'badge-yellow';
-    const outcome = t.outcome || (t.paper_trade ? 'paper' : 'pending');
-    const outcomeClass = t.outcome === 'win' ? 'badge-green' : t.outcome === 'loss' ? 'badge-red' : 'badge-muted';
+    const sideClass = t.side === 'no' ? 'badge-orange' : 'badge-green';
+    const isPaper = !!t.paper_trade;
+    const outcome = t.outcome || (isPaper ? 'paper' : 'pending');
+    const outcomeClass = t.outcome === 'win' ? 'badge-green' : t.outcome === 'loss' ? 'badge-red' : isPaper ? 'badge-yellow' : 'badge-muted';
     const pnl = t.pnl != null ? (t.pnl >= 0 ? '+' : '') + '$' + Number(t.pnl).toFixed(2) : '--';
     const pnlClass = t.pnl > 0 ? 'positive' : t.pnl < 0 ? 'negative' : '';
     return `<tr>
-      <td style="color:var(--text-muted);font-size:.75rem">${time}</td>
+      <td style="color:var(--text-muted);font-size:.75rem;white-space:nowrap">${time}</td>
       <td class="mono" style="font-size:.75rem">${t.ticker || '--'}</td>
       <td>${t.city || '--'}</td>
       <td><span class="badge ${sideClass}">${side}</span></td>
@@ -295,65 +487,125 @@ function logEvent(type, msg, timestampMs) {
     ? new Date(timestampMs).toLocaleTimeString('en-US', { hour12: false })
     : new Date().toLocaleTimeString('en-US', { hour12: false });
   const colors = {
-    signal: 'var(--accent)', trade: 'var(--green)', kill: 'var(--red)',
-    start: 'var(--green)', stop: 'var(--yellow)', error: 'var(--red)',
-    info: 'var(--text-muted)', forecast: '#eab308',
+    signal: 'var(--accent)', trade: 'var(--green)', paper: 'var(--yellow)',
+    kill: 'var(--red)', start: 'var(--green)', stop: 'var(--yellow)',
+    error: 'var(--red)', info: 'var(--text-muted)', forecast: '#eab308',
+    rejected: 'var(--orange)', settle: 'var(--blue)',
   };
   const color = colors[type] || 'var(--text-muted)';
   const div = document.createElement('div');
   div.innerHTML = `<span style="color:var(--text-muted)">${ts}</span> <span style="color:${color}">[${type}]</span> ${msg}`;
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
-  // Keep last 100 entries
-  while (log.children.length > 100) log.removeChild(log.firstChild);
+  while (log.children.length > 150) log.removeChild(log.firstChild);
 }
+
+function clearLog() {
+  const log = document.getElementById('event-log');
+  log.innerHTML = '<div style="color:var(--text-muted)">Log cleared</div>';
+  window._eventsSeeded = false;
+}
+
+// ── Agent Actions ──
 
 async function startAgent() {
   logEvent('start', 'Starting agent...');
   try {
     await api('/start', { method: 'POST' });
+    toast('Agent started');
     logEvent('start', 'Agent started');
     refresh();
     if (!refreshTimer) refreshTimer = setInterval(refresh, 5000);
-  } catch (e) { logEvent('error', 'Start failed: ' + e.message); }
+  } catch (e) { logEvent('error', 'Start failed: ' + e.message); toast('Start failed', 'error'); }
 }
 
 async function stopAgent() {
   logEvent('stop', 'Stopping agent...');
   try {
     await api('/stop', { method: 'POST' });
+    toast('Agent stopped');
     logEvent('stop', 'Agent stopped');
     refresh();
-    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
-  } catch (e) { logEvent('error', 'Stop failed: ' + e.message); }
+  } catch (e) { logEvent('error', 'Stop failed: ' + e.message); toast('Stop failed', 'error'); }
 }
 
 async function setPaperMode(enabled) {
   try {
     await api('/paper', { method: 'POST', body: { enabled } });
+    toast(enabled ? 'Paper mode enabled' : 'Paper mode disabled');
     logEvent('info', enabled ? 'Switched to PAPER mode' : 'Paper mode disabled');
     refresh();
-  } catch (e) { logEvent('error', 'Paper toggle failed: ' + e.message); }
+  } catch (e) { logEvent('error', 'Paper toggle failed: ' + e.message); toast('Failed', 'error'); }
 }
 
 async function goLive() {
-  if (!confirm('GO LIVE: Enable real trading with real money?')) return;
+  if (!confirm('GO LIVE: Enable real trading with real money?\n\nThis will execute actual orders on Kalshi.')) return;
   try {
     await api('/live', { method: 'POST' });
+    toast('LIVE TRADING ENABLED', 'error');
     logEvent('trade', 'LIVE TRADING ENABLED');
     refresh();
-  } catch (e) { logEvent('error', 'Go live failed: ' + e.message); }
+  } catch (e) { logEvent('error', 'Go live failed: ' + e.message); toast('Failed', 'error'); }
 }
 
 async function killSwitch() {
-  if (!confirm('KILL SWITCH: Cancel all orders and halt trading?')) return;
+  if (!confirm('KILL SWITCH: Cancel all orders and halt trading immediately?')) return;
   logEvent('kill', 'KILL SWITCH activated');
   try {
     await api('/kill', { method: 'POST' });
-    logEvent('kill', 'Kill confirmed — all orders cancelled');
+    toast('Kill switch activated');
+    logEvent('kill', 'Kill confirmed \u2014 all orders cancelled');
     refresh();
-    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
-  } catch (e) { logEvent('error', 'Kill failed: ' + e.message); }
+  } catch (e) { logEvent('error', 'Kill failed: ' + e.message); toast('Kill failed', 'error'); }
+}
+
+async function resetSafety() {
+  if (!confirm('Reset safety guard? This clears daily P&L tracking and re-enables trading after a kill switch.')) return;
+  try {
+    await api('/reset', { method: 'POST' });
+    toast('Safety guard reset');
+    logEvent('info', 'Safety guard reset');
+    refresh();
+  } catch (e) { logEvent('error', 'Reset failed: ' + e.message); toast('Reset failed', 'error'); }
+}
+
+async function setKelly() {
+  const val = Number(document.getElementById('kelly-slider').value) / 100;
+  try {
+    await api('/kelly', { method: 'POST', body: { fraction: val } });
+    toast(`Kelly fraction set to ${val.toFixed(2)}`);
+    logEvent('info', `Kelly fraction updated: ${val.toFixed(2)}`);
+    refresh();
+  } catch (e) { logEvent('error', 'Kelly update failed: ' + e.message); toast('Failed', 'error'); }
+}
+
+async function setEdge() {
+  const val = Number(document.getElementById('edge-slider').value) / 100;
+  try {
+    await api('/edge-threshold', { method: 'POST', body: { threshold: val } });
+    toast(`Edge threshold set to ${Math.round(val*100)}\u00a2`);
+    logEvent('info', `Edge threshold updated: ${Math.round(val*100)}\u00a2`);
+    refresh();
+  } catch (e) { logEvent('error', 'Edge update failed: ' + e.message); toast('Failed', 'error'); }
+}
+
+async function runSettlement() {
+  const btn = document.getElementById('btn-settle');
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+  try {
+    const result = await api('/settlement/run', { method: 'POST' });
+    const settled = result.settled || 0;
+    toast(settled > 0 ? `Settled ${settled} trades` : 'No trades to settle');
+    logEvent('settle', settled > 0 ? `Settlement complete: ${settled} trades resolved` : 'No unsettled trades found');
+    refresh();
+  } catch (e) {
+    logEvent('error', 'Settlement failed: ' + e.message);
+    toast('Settlement failed', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Run Now';
+  }
 }
 
 // SSE for real-time updates
@@ -376,7 +628,7 @@ function connectSSE() {
     } catch {}
   };
   es.onerror = () => {
-    logEvent('error', 'SSE disconnected — reconnecting in 5s');
+    logEvent('error', 'SSE disconnected \u2014 reconnecting in 5s');
     es.close();
     setTimeout(connectSSE, 5000);
   };

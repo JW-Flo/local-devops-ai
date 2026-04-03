@@ -232,8 +232,27 @@ export class MispricingDetector {
       }
     }
 
-    this.currentSignals = signals;
-    return signals;
+    // ── Deduplicate: keep only the best signal (highest edge) per ticker ──
+    const bestByTicker = new Map<string, MispricingSignal>();
+    for (const s of signals) {
+      const existing = bestByTicker.get(s.ticker);
+      if (!existing || s.edge > existing.edge) {
+        bestByTicker.set(s.ticker, s);
+      }
+    }
+    const deduped = Array.from(bestByTicker.values());
+
+    // ── Prune stale entries from lastLoggedEdge (older than 24h worth of tickers) ──
+    if (this.lastLoggedEdge.size > 500) {
+      const keys = Array.from(this.lastLoggedEdge.keys());
+      // Remove first half (oldest entries since Map preserves insertion order)
+      for (let i = 0; i < keys.length / 2; i++) {
+        this.lastLoggedEdge.delete(keys[i]);
+      }
+    }
+
+    this.currentSignals = deduped;
+    return deduped;
   }
 
   private logSignalIfNew(
