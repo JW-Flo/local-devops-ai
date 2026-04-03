@@ -22,6 +22,7 @@ export class MarketAgent {
   private settlement: SettlementService | null = null;
   private noaaTimer: NodeJS.Timeout | null = null;
   private bankrollTimer: NodeJS.Timeout | null = null;
+  private autoTuneTimer: NodeJS.Timeout | null = null;
   private bankroll = 0;
   private marketMeta: Map<string, { title: string; ticker: string }> = new Map();
   private running = false;
@@ -120,6 +121,11 @@ export class MarketAgent {
       }
     }, 30 * 60 * 1000);
 
+    // Auto-tune every 2 hours based on performance data
+    this.autoTuneTimer = setInterval(() => this.runAutoTune(), 2 * 60 * 60 * 1000);
+    // Run initial auto-tune after 60s to let performance data load
+    setTimeout(() => this.runAutoTune(), 60_000);
+
     setTimeout(() => {
       this.warmedUp = true;
       const tickerCount = this.feed.getTickerSnapshot().size;
@@ -137,6 +143,7 @@ export class MarketAgent {
     console.log('Stopping Market Agent');
     if (this.noaaTimer) clearInterval(this.noaaTimer);
     if (this.bankrollTimer) clearInterval(this.bankrollTimer);
+    if (this.autoTuneTimer) clearInterval(this.autoTuneTimer);
     if (this.settlement) this.settlement.stop();
     this.feed.stop();
 
@@ -272,6 +279,7 @@ export class MarketAgent {
       kellyFraction: this.detector.getKellyFraction(),
       edgeThreshold: this.detector.getEdgeThreshold(),
       lastError: this.lastError,
+      excludedCities: this.detector.getExcludedCities(),
       errors: this.errors.slice(-10),
       performance: this.executor.getPerformance().getStats(),
     };
@@ -325,6 +333,34 @@ export class MarketAgent {
 
   resetSafety(): void {
     this.safety.reset();
+  }
+
+  private runAutoTune(): void {
+    const stats = this.executor.getPerformance().getStats();
+    if (stats.recommendedAdjustments.length === 0) return;
+    const applied = this.detector.autoTune(stats.recommendedAdjustments);
+    if (applied.length > 0) {
+      console.log('[market-agent] Auto-tune applied:');
+      applied.forEach(a => console.log('  ' + a));
+      notify('Auto-tune: ' + applied.join(' | '));
+    }
+  }
+
+  excludeCity(city: string): void {
+    this.detector.excludeCity(city);
+  }
+
+  includeCity(city: string): void {
+    this.detector.includeCity(city);
+  }
+
+  getExcludedCities(): string[] {
+    return this.detector.getExcludedCities();
+  }
+
+  runAutoTuneNow(): string[] {
+    const stats = this.executor.getPerformance().getStats();
+    return this.detector.autoTune(stats.recommendedAdjustments);
   }
 }
 
@@ -571,6 +607,43 @@ export function createMarketAgentRouter(): Router {
     } catch (err) {
       res.status(500).json({ status: 'error', message: (err as Error).message });
     }
+  });
+
+  router.post('/exclude-city', requireAuth, (req: Request, res: Response) => {
+    if (!agentInstance) {
+      res.status(400).json({ status: 'error', message: 'Agent not running' });
+      return;
+    }
+    const city = req.body?.city;
+    if (!city) {
+      res.status(400).json({ status: 'error', message: 'city is required' });
+      return;
+    }
+    agentInstance.excludeCity(city);
+    res.json({ status: 'ok', excluded: agentInstance.getExcludedCities() });
+  });
+
+  router.post('/include-city', requireAuth, (req: Request, res: Response) => {
+    if (!agentInstance) {
+      res.status(400).json({ status: 'error', message: 'Agent not running' });
+      return;
+    }
+    const city = req.body?.city;
+    if (!city) {
+      res.status(400).json({ status: 'error', message: 'city is required' });
+      return;
+    }
+    agentInstance.includeCity(city);
+    res.json({ status: 'ok', excluded: agentInstance.getExcludedCities() });
+  });
+
+  router.post('/auto-tune', requireAuth, (req: Request, res: Response) => {
+    if (!agentInstance) {
+      res.status(400).json({ status: 'error', message: 'Agent not running' });
+      return;
+    }
+    const applied = agentInstance.runAutoTuneNow();
+    res.json({ status: 'ok', applied, count: applied.length });
   });
 
   return router;
