@@ -13,6 +13,7 @@
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1015.0",
     "@iarna/toml": "^2.2.5",
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "blessed": "^0.1.81",
     "blessed-contrib": "^4.11.0",
     "chokidar": "^3.6.0",
