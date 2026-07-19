@@ -55,6 +55,16 @@ export function loadSources(): KnowledgeSource[] {
         include: ["*.md", "*.ts"],
         enabled: false,
       },
+      {
+        // Single 208KB README; handled by the BOSK structural chunker, not the
+        // generic fixed-width path. LICENSE/CONTRIBUTING are deliberately excluded.
+        id: "book-of-secret-knowledge",
+        type: "github-repo",
+        target: "trimstray/the-book-of-secret-knowledge",
+        dir: "book-of-secret-knowledge",
+        include: ["README.md"],
+        enabled: true,
+      },
     ];
     writeFileSync(path, JSON.stringify({ sources: defaults }, null, 2));
     return defaults;
