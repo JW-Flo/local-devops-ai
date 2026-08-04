@@ -71,6 +71,7 @@ const TOOL_CATALOG = [
   { name: "helm", desc: "chart install/upgrade" },
   { name: "flux", desc: "GitOps reconciliation" },
   { name: "observability", desc: "prometheus/loki/grafana queries" },
+  { name: "n8n", desc: "list/get/activate workflows and trigger webhook automations" },
 ];
 
 // ── Smart Multi-Provider LLM Routing ──

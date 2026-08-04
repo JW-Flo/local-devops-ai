@@ -11,6 +11,7 @@ import { HelmTool } from "./tools/helm.js";
 import { FluxTool } from "./tools/flux.js";
 import { ObservabilityTool } from "./tools/observability.js";
 import { githubTool } from "./tools/github.js";
+import { N8nTool } from "./tools/n8n.js";
 import type { TaskRequest } from "./task-schema.js";
 import { ApprovalStore, type PendingApproval } from "./approvals/store.js";
 import { memoryStore } from "./memory/store.js";
@@ -48,6 +49,7 @@ export class TaskOrchestrator {
     helm: new HelmTool(),
     flux: new FluxTool(),
     observability: new ObservabilityTool(),
+    n8n: new N8nTool(),
   } as const;
 
   submit(task: TaskRequest): Promise<TaskResult | PendingResult> {
@@ -270,6 +272,50 @@ export class TaskOrchestrator {
             obs.message = "No observability queries configured";
           }
           actions.push({ tool, result: obs });
+          break;
+        }
+        case "n8n": {
+          const meta = getToolMeta<{
+            action?: "list" | "get" | "activate" | "deactivate" | "executions" | "trigger";
+            id?: string;
+            activeOnly?: boolean;
+            limit?: number;
+            path?: string;
+            method?: "GET" | "POST";
+            payload?: unknown;
+            test?: boolean;
+          }>("n8n");
+          switch (meta?.action) {
+            case "get":
+              if (!meta.id) { actions.push({ tool, result: { error: "n8n get requires id" } }); break; }
+              actions.push({ tool, result: await this.tools.n8n.getWorkflow(meta.id) });
+              break;
+            case "activate":
+              if (!meta.id) { actions.push({ tool, result: { error: "n8n activate requires id" } }); break; }
+              actions.push({ tool, result: await this.tools.n8n.activate(meta.id) });
+              break;
+            case "deactivate":
+              if (!meta.id) { actions.push({ tool, result: { error: "n8n deactivate requires id" } }); break; }
+              actions.push({ tool, result: await this.tools.n8n.deactivate(meta.id) });
+              break;
+            case "executions":
+              actions.push({ tool, result: await this.tools.n8n.listExecutions(meta.limit ?? 20) });
+              break;
+            case "trigger":
+              if (!meta.path) { actions.push({ tool, result: { error: "n8n trigger requires path" } }); break; }
+              actions.push({
+                tool,
+                result: await this.tools.n8n.trigger(meta.path, {
+                  method: meta.method,
+                  payload: meta.payload,
+                  test: meta.test,
+                  dryRun: task.dryRun,
+                }),
+              });
+              break;
+            default:
+              actions.push({ tool, result: await this.tools.n8n.listWorkflows(meta?.activeOnly ?? false) });
+          }
           break;
         }
       }

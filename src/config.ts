@@ -25,6 +25,9 @@ type Config = {
   prometheusUrl?: string;
   lokiUrl?: string;
   grafanaUrl?: string;
+  // n8n workflow automation
+  n8nBaseUrl: string;
+  n8nApiKey?: string;
   // AWS Bedrock
   awsRegion: string;
   bedrockModel: string;
@@ -107,6 +110,9 @@ export const config: Config = {
   prometheusUrl: process.env.PROMETHEUS_URL,
   lokiUrl: process.env.LOKI_URL,
   grafanaUrl: process.env.GRAFANA_URL,
+  // n8n workflow automation
+  n8nBaseUrl: process.env.N8N_BASE_URL ?? "http://127.0.0.1:5678",
+  n8nApiKey: process.env.N8N_API_KEY,
   // AWS Bedrock
   awsRegion: process.env.AWS_REGION ?? "us-east-1",
   bedrockModel: process.env.BEDROCK_MODEL ?? "us.anthropic.claude-3-5-haiku-20241022-v1:0",
