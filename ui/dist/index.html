@@ -13,125 +13,223 @@
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--txt);
     font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
-  header { display:flex; align-items:center; gap:16px; padding:16px 24px;
+  header { display:flex; align-items:center; gap:16px; padding:14px 24px;
     border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:5; }
-  header h1 { font-size:16px; margin:0; font-weight:650; letter-spacing:.2px; }
+  header h1 { font-size:16px; margin:0; font-weight:650; }
   .prov-badge { background:var(--chip); color:var(--accent); padding:3px 10px;
     border-radius:999px; font-size:12px; font-weight:600; }
   .spacer { flex:1; }
   #updated { color:var(--muted); font-size:12px; }
-  main { padding:24px; display:grid; gap:20px; max-width:1200px; margin:0 auto; }
+  main { padding:22px; display:grid; gap:18px; max-width:1200px; margin:0 auto; }
   .grid { display:grid; gap:14px; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
   .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.6px;
     color:var(--muted); margin:0 0 12px; font-weight:650; }
+  .full { grid-column:1/-1; }
   .svc { display:flex; align-items:center; gap:10px; }
   .dot { width:10px; height:10px; border-radius:50%; flex:none; }
   .dot.up { background:var(--good); box-shadow:0 0 8px var(--good); }
   .dot.down { background:var(--bad); box-shadow:0 0 8px var(--bad); }
-  .svc .name { font-weight:600; text-transform:capitalize; }
-  .svc .url { color:var(--muted); font-size:12px; }
+  .name { font-weight:600; text-transform:capitalize; }
+  .url { color:var(--muted); font-size:12px; }
   .row { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid var(--panel2); }
   .row:last-child { border-bottom:none; }
   .row .k { color:var(--muted); } .row .v { font-weight:600; }
   .chips { display:flex; flex-wrap:wrap; gap:8px; }
-  .chip { background:var(--chip); padding:5px 11px; border-radius:8px; font-size:12.5px;
-    border:1px solid var(--line); }
+  .chip { background:var(--chip); padding:5px 11px; border-radius:8px; font-size:12.5px; border:1px solid var(--line); }
   .chip.hl { border-color:var(--accent); color:var(--accent); font-weight:650; }
   .pill { font-size:11px; padding:2px 8px; border-radius:999px; font-weight:650; }
   .pill.good { background:rgba(63,185,80,.15); color:var(--good); }
   .pill.warn { background:rgba(210,153,34,.15); color:var(--warn); }
   .pill.bad { background:rgba(248,81,73,.15); color:var(--bad); }
   .muted { color:var(--muted); }
-  .wf { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--panel2); }
-  .full { grid-column:1/-1; }
   a { color:var(--accent); text-decoration:none; }
+  /* controls */
+  button, .btn { background:var(--chip); color:var(--txt); border:1px solid var(--line);
+    border-radius:8px; padding:7px 13px; font-size:13px; font-weight:600; cursor:pointer; }
+  button:hover { border-color:var(--accent); color:var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  button.primary { background:var(--accent); color:#03101f; border-color:var(--accent); }
+  .bar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  .bar .sep { width:1px; height:24px; background:var(--line); margin:0 4px; }
+  input, select, textarea { background:var(--panel2); color:var(--txt); border:1px solid var(--line);
+    border-radius:8px; padding:8px 11px; font-size:13px; font-family:inherit; }
+  input:focus, textarea:focus, select:focus { outline:none; border-color:var(--accent); }
+  .grow { flex:1; min-width:180px; }
+  .feedback { font-size:12px; color:var(--muted); min-height:16px; margin-top:8px; white-space:pre-wrap; }
+  .results { margin-top:10px; display:flex; flex-direction:column; gap:8px; }
+  .result { background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:9px 11px; font-size:13px; }
+  .result .t { font-weight:650; }
+  .result .s { color:var(--muted); font-size:11px; }
+  .wf { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--panel2); }
+  .wf .spacer { flex:1; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Local DevOps AI · Unified Console</h1>
+  <h1>Local DevOps AI · Console</h1>
   <span class="prov-badge" id="provider">—</span>
   <div class="spacer"></div>
+  <button onclick="tick()">↻ Refresh</button>
   <span id="updated">connecting…</span>
 </header>
-<main id="root"><div class="muted">Loading dashboard…</div></main>
+<main id="main">
+  <!-- CONTROLS -->
+  <section class="card full">
+    <h2>Controls</h2>
+    <div class="bar">
+      <strong>Knowledge:</strong>
+      <button onclick="act('/knowledge/fetch','POST','fetching sources…')">Fetch sources</button>
+      <button onclick="act('/knowledge/ingest','POST','ingesting (embeds new/changed)…')">Ingest now</button>
+      <span class="sep"></span>
+      <strong>Agent loop:</strong>
+      <button onclick="act('/agent/loop/start','POST','starting loop…',{intervalMs:1800000})">Start</button>
+      <button onclick="act('/agent/loop/stop','POST','stopping loop…')">Stop</button>
+      <span class="sep"></span>
+      <a class="btn" href="http://127.0.0.1:5678" target="_blank">Open n8n ↗</a>
+    </div>
+    <div class="feedback" id="ctl-fb"></div>
+  </section>
+
+  <!-- SEARCH -->
+  <section class="card full">
+    <h2>Search knowledge &amp; Wikipedia</h2>
+    <div class="bar">
+      <input class="grow" id="q" placeholder="Ask anything… (e.g. how to prevent SSRF, the French Revolution)" onkeydown="if(event.key==='Enter')doSearch()" />
+      <select id="src">
+        <option value="docs">Curated docs</option>
+        <option value="wiki-sem">Wikipedia (semantic)</option>
+        <option value="wiki-kw">Wikipedia (keyword)</option>
+      </select>
+      <button class="primary" onclick="doSearch()">Search</button>
+    </div>
+    <div class="results" id="search-results"></div>
+  </section>
+
+  <!-- TASK RUNNER -->
+  <section class="card full">
+    <h2>Run an agent task <span class="muted" style="text-transform:none">(LLM on CPU — can take ~90s)</span></h2>
+    <div class="bar">
+      <input class="grow" id="obj" placeholder="Objective… (e.g. list n8n workflows)" />
+      <select id="ttype"><option>execute</option><option>plan</option><option>diagnose</option><option>review</option></select>
+      <select id="ttool">
+        <option value="">no tool</option><option>n8n</option><option>kiwix</option><option>shell</option><option>github</option><option>git</option>
+      </select>
+      <label class="muted"><input type="checkbox" id="tdry" checked style="vertical-align:middle"> dry-run</label>
+      <button class="primary" onclick="runTask()">Run task</button>
+    </div>
+    <div class="feedback" id="task-fb"></div>
+  </section>
+
+  <div id="root"></div>
+</main>
 <script>
 const $ = (h) => { const d=document.createElement('div'); d.innerHTML=h.trim(); return d.firstChild; };
 const esc = (s) => String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const ago = (ts) => { if(!ts) return 'never'; const s=Math.round((Date.now()-ts)/1000);
   if(s<60) return s+'s ago'; if(s<3600) return Math.round(s/60)+'m ago'; return Math.round(s/3600)+'h ago'; };
 
-function providerPill(p){
-  if(p.disabled) return '<span class="pill bad">disabled</span>';
-  if(p.recoveryMode) return '<span class="pill warn">recovery</span>';
-  return '<span class="pill good">healthy</span>';
+// POST/GET action button with feedback
+async function act(path, method, msg, body) {
+  const fb = document.getElementById('ctl-fb'); fb.textContent = msg || 'working…';
+  try {
+    const opt = { method };
+    if (body) { opt.headers = {'Content-Type':'application/json'}; opt.body = JSON.stringify(body); }
+    const r = await fetch(path, opt); const j = await r.json();
+    fb.textContent = (j.status||'')+' — '+path+'  '+JSON.stringify(j.data||j.message||'').slice(0,200);
+    tick();
+  } catch (e) { fb.textContent = 'error: '+e.message; }
+}
+
+async function doSearch() {
+  const q = document.getElementById('q').value.trim();
+  const src = document.getElementById('src').value;
+  const out = document.getElementById('search-results');
+  if (!q) return;
+  out.innerHTML = '<div class="muted">searching…</div>';
+  try {
+    let url;
+    if (src === 'docs') url = '/knowledge/search?q='+encodeURIComponent(q);
+    else url = '/wiki/search?mode='+(src==='wiki-kw'?'keyword':'semantic')+'&q='+encodeURIComponent(q);
+    const j = await (await fetch(url)).json();
+    const rows = (j.data||[]);
+    if (!rows.length) { out.innerHTML = '<div class="muted">no results</div>'; return; }
+    out.innerHTML = '';
+    rows.forEach(r => {
+      const title = r.title || r.path || (r.text? r.text.slice(0,60) : 'result');
+      const body = (r.text || r.snippet || '').replace(/\s+/g,' ').slice(0,260);
+      const score = r.score!=null ? ' · score '+r.score.toFixed(2) : '';
+      const link = r.url ? ` · <a href="${esc(r.url)}" target="_blank">source ↗</a>` : '';
+      out.appendChild($(`<div class="result"><div class="t">${esc(title)}</div><div class="s">${esc(src)}${score}${link}</div><div>${esc(body)}</div></div>`));
+    });
+  } catch (e) { out.innerHTML = '<div class="muted">error: '+esc(e.message)+'</div>'; }
+}
+
+async function runTask() {
+  const objective = document.getElementById('obj').value.trim();
+  const type = document.getElementById('ttype').value;
+  const tool = document.getElementById('ttool').value;
+  const dryRun = document.getElementById('tdry').checked;
+  const fb = document.getElementById('task-fb');
+  if (objective.length < 4) { fb.textContent = 'objective must be at least 4 characters'; return; }
+  fb.textContent = 'running… (LLM on CPU, ~90s)';
+  const body = { type, objective, tools: tool?[tool]:[], dryRun };
+  if (tool==='n8n') body.metadata = { n8n:{ action:'list' } };
+  try {
+    const j = await (await fetch('/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    if (j.status==='success') fb.textContent = 'done. actions: '+JSON.stringify(j.data.actions).slice(0,300)+'\n\n'+(j.data.llm?.output||'').slice(0,400);
+    else fb.textContent = j.status+': '+JSON.stringify(j.message||j.details);
+  } catch (e) { fb.textContent = 'error: '+e.message; }
 }
 
 function kvRows(obj){
   if(!obj || typeof obj!=='object') return '<div class="muted">n/a</div>';
-  return Object.entries(obj).map(([k,v])=>{
-    if(v && typeof v==='object') v=JSON.stringify(v);
-    return `<div class="row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
-  }).join('') || '<div class="muted">—</div>';
+  return Object.entries(obj).map(([k,v])=>{ if(v&&typeof v==='object')v=JSON.stringify(v);
+    return `<div class="row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`; }).join('')||'<div class="muted">—</div>';
+}
+function provPill(p){ if(p.disabled)return '<span class="pill bad">disabled</span>';
+  if(p.recoveryMode)return '<span class="pill warn">recovery</span>'; return '<span class="pill good">healthy</span>'; }
+
+async function wf(id, action){
+  const el=document.getElementById('wf-fb'); el.textContent=action+' '+id+'…';
+  try{ const j=await (await fetch('/n8n/'+id+'/'+action,{method:'POST'})).json(); el.textContent=j.status+' — '+action; tick(); }
+  catch(e){ el.textContent='error: '+e.message; }
 }
 
 function render(d){
-  document.getElementById('provider').textContent = 'LLM: '+(d.gateway?.llmProvider||'?');
-  document.getElementById('updated').textContent = 'updated '+new Date(d.timestamp).toLocaleTimeString();
-  const root = document.getElementById('root'); root.innerHTML='';
+  document.getElementById('provider').textContent='LLM: '+(d.gateway?.llmProvider||'?');
+  document.getElementById('updated').textContent='updated '+new Date(d.timestamp).toLocaleTimeString();
+  const root=document.getElementById('root'); root.innerHTML='';
 
-  // Services
-  const svc = $(`<section class="card full"><h2>Services</h2><div class="grid" id="svcgrid"></div></section>`);
-  root.appendChild(svc);
-  const sg = svc.querySelector('#svcgrid');
-  (d.services||[]).forEach(s=>{
-    sg.appendChild($(`<div class="card"><div class="svc"><span class="dot ${s.up?'up':'down'}"></span>
-      <div><div class="name">${esc(s.name)}</div><div class="url">${esc(s.url)}</div></div></div>
-      <div class="row" style="margin-top:10px"><span class="k">status</span>
-      <span class="v">${s.up?'online':'offline'}</span></div>
-      <div class="row"><span class="k">auto-heal</span><span class="v">${s.autoRestart?'yes':'monitor'}</span></div>
-      <div class="row"><span class="k">last up</span><span class="v">${ago(s.lastUp)}</span></div></div>`));
-  });
+  const svc=$(`<section class="card full"><h2>Services</h2><div class="grid" id="sg"></div></section>`); root.appendChild(svc);
+  const sg=svc.querySelector('#sg');
+  (d.services||[]).forEach(s=>sg.appendChild($(`<div class="card"><div class="svc"><span class="dot ${s.up?'up':'down'}"></span>
+    <div><div class="name">${esc(s.name)}</div><div class="url">${esc(s.url)}</div></div></div>
+    <div class="row" style="margin-top:10px"><span class="k">status</span><span class="v">${s.up?'online':'offline'}</span></div>
+    <div class="row"><span class="k">last up</span><span class="v">${ago(s.lastUp)}</span></div></div>`)));
 
-  // Two-column: providers + agent loop
-  const providers = (d.providers||[]).map(p=>
-    `<div class="row"><span class="k" style="text-transform:capitalize">${esc(p.name)}</span>
-     <span class="v">${providerPill(p)}</span></div>`).join('');
+  const providers=(d.providers||[]).map(p=>`<div class="row"><span class="k" style="text-transform:capitalize">${esc(p.name)}</span><span class="v">${provPill(p)}</span></div>`).join('');
   root.appendChild($(`<div class="grid">
     <section class="card"><h2>LLM Providers</h2>${providers||'<div class="muted">—</div>'}</section>
     <section class="card"><h2>Agent Loop</h2>${kvRows(d.agentLoop)}</section>
-    <section class="card"><h2>Self-Healer</h2>
-      <div class="row"><span class="k">total issues</span><span class="v">${d.healer?.totalIssues??0}</span></div>
-      <div class="row"><span class="k">active requests</span><span class="v">${d.healer?.activeRequests??0}</span></div>
-      ${kvRows(d.healer?.byCategory)}</section>
+    <section class="card"><h2>Self-Healer</h2><div class="row"><span class="k">issues</span><span class="v">${d.healer?.totalIssues??0}</span></div>${kvRows(d.healer?.byCategory)}</section>
   </div>`));
 
-  // Tool portfolio
-  const chips = (d.tools||[]).map(t=>
-    `<span class="chip ${t.name==='n8n'?'hl':''}" title="${esc(t.desc)}">${esc(t.name)}</span>`).join('');
-  root.appendChild($(`<section class="card full"><h2>Agent Tool Portfolio (${(d.tools||[]).length})</h2>
-    <div class="chips">${chips}</div></section>`));
+  const chips=(d.tools||[]).map(t=>`<span class="chip ${t.name==='n8n'||t.name==='kiwix'?'hl':''}" title="${esc(t.desc)}">${esc(t.name)}</span>`).join('');
+  root.appendChild($(`<section class="card full"><h2>Agent Tool Portfolio (${(d.tools||[]).length})</h2><div class="chips">${chips}</div></section>`));
 
-  // n8n workflows
-  let wfBody;
-  if(!d.n8n?.reachable) wfBody='<div class="muted">n8n unreachable</div>';
-  else if(!d.n8n?.apiKeyConfigured) wfBody='<div class="muted">reachable — API key not configured</div>';
-  else if(!d.n8n.workflows?.length) wfBody='<div class="muted">no workflows yet — create one in the <a href="http://127.0.0.1:5678" target="_blank">n8n editor</a></div>';
-  else wfBody=d.n8n.workflows.map(w=>`<div class="wf"><span class="dot ${w.active?'up':'down'}"></span>
-    <span>${esc(w.name)}</span><span class="muted">#${esc(w.id)}</span></div>`).join('');
-  root.appendChild($(`<section class="card full"><h2>n8n Workflows</h2>${wfBody}</section>`));
+  const n8n=d.n8n||{}; let wb;
+  if(!n8n.reachable) wb='<div class="muted">n8n unreachable</div>';
+  else if(!(n8n.workflows||[]).length) wb='<div class="muted">no workflows — build one in the <a href="http://127.0.0.1:5678" target="_blank">n8n editor ↗</a></div>';
+  else wb=n8n.workflows.map(w=>`<div class="wf"><span class="dot ${w.active?'up':'down'}"></span><span>${esc(w.name)}</span><span class="spacer"></span>
+    <button onclick="wf('${esc(w.id)}','${w.active?'deactivate':'activate'}')">${w.active?'Deactivate':'Activate'}</button></div>`).join('');
+  root.appendChild($(`<section class="card full"><h2>n8n Workflows</h2>${wb}<div class="feedback" id="wf-fb"></div></section>`));
 
-  // KPIs
   root.appendChild($(`<section class="card full"><h2>KPIs</h2>${kvRows(d.kpi)}</section>`));
 }
 
-async function tick(){
-  try{
-    const r = await fetch('/api/dashboard'); const j = await r.json();
-    render(j);
-  }catch(e){ document.getElementById('updated').textContent='fetch error: '+e.message; }
-}
+async function tick(){ try{ render(await (await fetch('/api/dashboard')).json()); }
+  catch(e){ document.getElementById('updated').textContent='fetch error: '+e.message; } }
 tick(); setInterval(tick, 10000);
 </script>
 </body>
