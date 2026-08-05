@@ -12,6 +12,7 @@ import { FluxTool } from "./tools/flux.js";
 import { ObservabilityTool } from "./tools/observability.js";
 import { githubTool } from "./tools/github.js";
 import { N8nTool } from "./tools/n8n.js";
+import { KiwixTool } from "./tools/kiwix.js";
 import type { TaskRequest } from "./task-schema.js";
 import { ApprovalStore, type PendingApproval } from "./approvals/store.js";
 import { memoryStore } from "./memory/store.js";
@@ -50,6 +51,7 @@ export class TaskOrchestrator {
     flux: new FluxTool(),
     observability: new ObservabilityTool(),
     n8n: new N8nTool(),
+    kiwix: new KiwixTool(),
   } as const;
 
   submit(task: TaskRequest): Promise<TaskResult | PendingResult> {
@@ -315,6 +317,17 @@ export class TaskOrchestrator {
               break;
             default:
               actions.push({ tool, result: await this.tools.n8n.listWorkflows(meta?.activeOnly ?? false) });
+          }
+          break;
+        }
+        case "kiwix": {
+          const meta = getToolMeta<{ action?: "search" | "article"; query?: string; path?: string; limit?: number }>("kiwix");
+          if (meta?.action === "article") {
+            if (!meta.path) { actions.push({ tool, result: { error: "kiwix article requires path" } }); break; }
+            actions.push({ tool, result: await this.tools.kiwix.getArticle(meta.path) });
+          } else {
+            const q = meta?.query ?? task.objective;
+            actions.push({ tool, result: await this.tools.kiwix.search(q, meta?.limit ?? 8) });
           }
           break;
         }
