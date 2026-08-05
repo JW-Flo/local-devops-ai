@@ -85,6 +85,7 @@ async function fetchGitHubRepo(source: KnowledgeSource): Promise<number> {
   if (!repoRes.ok) throw new Error(`GitHub API ${repoRes.status} for ${source.target}`);
   const repoData = (await repoRes.json()) as any;
   const branch = repoData.default_branch ?? "main";
+  const isPrivate = repoData.private === true;
 
   // Get file tree (recursive)
   const treeRes = await fetch(
@@ -117,11 +118,22 @@ async function fetchGitHubRepo(source: KnowledgeSource): Promise<number> {
   let fetched = 0;
   for (const file of files) {
     try {
-      // Use raw.githubusercontent.com for content (no API rate limit)
-      const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${file.path}`;
-      const contentRes = await fetch(rawUrl);
-      if (!contentRes.ok) continue;
-      const content = await contentRes.text();
+      // Public: raw.githubusercontent.com (no API rate limit).
+      // Private: raw host is unauthenticated (404s), so use the authenticated
+      // Contents API with Accept: raw instead.
+      let content: string;
+      if (isPrivate) {
+        const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${file.path
+          .split("/").map(encodeURIComponent).join("/")}?ref=${branch}`;
+        const apiRes = await fetch(apiUrl, { headers: { ...headers, Accept: "application/vnd.github.raw" } });
+        if (!apiRes.ok) continue;
+        content = await apiRes.text();
+      } else {
+        const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${file.path}`;
+        const contentRes = await fetch(rawUrl);
+        if (!contentRes.ok) continue;
+        content = await contentRes.text();
+      }
       if (!content.trim()) continue;
 
       // Flatten path: src/docs/guide.md -> src_docs_guide.md
