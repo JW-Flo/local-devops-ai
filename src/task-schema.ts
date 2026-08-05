@@ -5,7 +5,7 @@ export const TaskSchema = z.object({
   objective: z.string().min(4),
   contextPaths: z.array(z.string()).default([]),
   tools: z
-    .array(z.enum(["git", "terraform", "kubernetes", "docker", "shell", "openclaw", "ansible", "helm", "flux", "observability", "github"]))
+    .array(z.enum(["git", "terraform", "kubernetes", "docker", "shell", "openclaw", "ansible", "helm", "flux", "observability", "github", "n8n"]))
     .default([]),
   approvalRequired: z.boolean().default(false),
   dryRun: z.boolean().default(true),
