@@ -13,7 +13,8 @@ function chunkText(text: string, chunkSize = 1000): string[] {
   for (let i = 0; i < text.length; i += chunkSize) {
     chunks.push(text.slice(i, i + chunkSize));
   }
-  return chunks;
+  // Drop garbage chunks (lone punctuation / whitespace, e.g. trailing "}" or ")").
+  return chunks.filter((c) => c.replace(/[^a-zA-Z0-9]/g, "").length >= 20);
 }
 
 async function walk(dir: string, files: string[] = []): Promise<string[]> {

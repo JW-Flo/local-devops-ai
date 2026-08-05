@@ -137,6 +137,11 @@ export class KnowledgeStore {
   }
 
   async query(prompt: string, limit = 5): Promise<string[]> {
+    return (await this.queryScored(prompt, limit)).map((r) => r.text);
+  }
+
+  /** Vector search returning similarity scores (for relevance thresholding). */
+  async queryScored(prompt: string, limit = 5): Promise<Array<{ text: string; score: number }>> {
     const vector = await this.embed(prompt);
     const res = await fetch(`${config.qdrantUrl}/collections/${this.collectionName}/points/search`, {
       method: "POST",
@@ -147,9 +152,9 @@ export class KnowledgeStore {
       throw new Error(`Qdrant search failed: ${res.statusText}`);
     }
     const data = (await res.json()) as {
-      result: Array<{ payload: { text: string } }>;
+      result: Array<{ payload: { text: string }; score: number }>;
     };
-    return data.result?.map((r) => r.payload.text) ?? [];
+    return data.result?.map((r) => ({ text: r.payload.text, score: r.score })) ?? [];
   }
 
   async stats(): Promise<{ points: number }> {
