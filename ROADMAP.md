@@ -3152,3 +3152,20 @@
 - [ ] **Implement CORS Protection Middleware** — Unmet dependencies: security-middleware-setup
 
 **Stats:** 2 dispatched, 0 succeeded, 2 failed, 3 skipped (43750ms)
+
+## Phase 7: Local Knowledge & Integrations — HIGH
+
+- [x] n8n workflow-automation tool wired into agent portfolio (PR #31)
+- [x] Unified console dashboard — service health, tools, providers, KPIs (PR #32)
+- [x] Kiwix offline-Wikipedia tool — full-text search over local ZIM, 19.2M articles (PR #33)
+- [x] Durable auto-start launcher for Qdrant / n8n / kiwix / gateway (Startup-folder VBS)
+- [x] Seed curated knowledge sources — 16 openly-licensed repos (~2,200 files)
+- [x] Enable auto-growth — knowledge watcher + 6h source re-fetch
+- [ ] Fix /tasks HTTP 500 — orchestrator works in isolation; add flushed error logging then root-cause (LLM context or memoryStore.add)
+- [ ] Add GH_PAT to gateway .env — unlock private-repo ingestion + higher GitHub rate limits
+- [ ] Add license + source-URL provenance to each ingested knowledge chunk
+- [ ] Pin Qdrant --storage-dir in self-healer restart to avoid storage-path drift
+- [ ] Pre-embedded semantic Wikipedia (bge-m3) → separate Qdrant collection + query router
+- [ ] Bridge Kiwix keyword search into RAG as a fallback when vector hits are weak
+- [ ] Resolve 6 pre-existing typecheck errors (market-agent, kalshi-rest, whatsapp)
+- [ ] Consider NSSM/Windows-service install for the stack (vs Startup folder)
