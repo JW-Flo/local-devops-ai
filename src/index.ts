@@ -23,6 +23,8 @@ import { addSSEClient, broadcast } from "./events.js";
 import { collectMetrics } from "./metrics.js";
 import { runAgent, getAgentState, resetAgentState, TOOL_CATALOG } from "./agent.js";
 import { N8nTool } from "./tools/n8n.js";
+import { KiwixTool } from "./tools/kiwix.js";
+import { semanticWiki, wikiCollectionReady } from "./knowledge/wiki-semantic.js";
 import { executeCodeTask } from "./coding-agent.js";
 import {
   startAgentLoop, stopAgentLoop, getAgentLoopState, updateLoopConfig,
@@ -79,6 +81,7 @@ app.use(express.static(uiDistPath));
 
 const orchestrator = new TaskOrchestrator();
 const n8nTool = new N8nTool();
+const kiwixTool = new KiwixTool();
 const scheduler = new Scheduler(orchestrator);
 const knowledgeIngester = new KnowledgeIngester();
 
@@ -175,6 +178,50 @@ app.get("/api/dashboard", async (_req, res) => {
     healer: getHealerStats(),
     kpi: getKPIDashboard(),
   });
+});
+
+// ── Console: knowledge + Wikipedia search ──
+
+app.get("/knowledge/search", async (req, res) => {
+  const q = String(req.query.q ?? "");
+  if (!q) return res.status(400).json({ status: "error", message: "q required" });
+  try {
+    const hits = await knowledgeStore.queryScored(q, Number(req.query.limit ?? 6));
+    res.json({ status: "success", data: hits });
+  } catch (err) {
+    res.status(500).json({ status: "error", message: (err as Error).message });
+  }
+});
+
+app.get("/wiki/search", async (req, res) => {
+  const q = String(req.query.q ?? "");
+  if (!q) return res.status(400).json({ status: "error", message: "q required" });
+  const mode = String(req.query.mode ?? "semantic");
+  const limit = Number(req.query.limit ?? 6);
+  try {
+    if (mode === "keyword") {
+      return res.json({ status: "success", mode, data: await kiwixTool.search(q, limit) });
+    }
+    if (!(await wikiCollectionReady())) {
+      return res.json({ status: "success", mode: "keyword-fallback", data: await kiwixTool.search(q, limit) });
+    }
+    res.json({ status: "success", mode, data: await semanticWiki(q, limit) });
+  } catch (err) {
+    res.status(500).json({ status: "error", message: (err as Error).message });
+  }
+});
+
+// ── Console: n8n workflow controls ──
+
+app.post("/n8n/:id/:action", async (req, res) => {
+  const { id, action } = req.params;
+  try {
+    if (action === "activate") return res.json({ status: "success", data: await n8nTool.activate(id) });
+    if (action === "deactivate") return res.json({ status: "success", data: await n8nTool.deactivate(id) });
+    res.status(400).json({ status: "error", message: "action must be activate|deactivate" });
+  } catch (err) {
+    res.status(500).json({ status: "error", message: (err as Error).message });
+  }
 });
 
 // ── SSE Event Stream ──
