@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { config } from "../config.js";
 
 type KnowledgeChunk = {
@@ -70,19 +71,54 @@ export class KnowledgeStore {
       .replace(/  +/g, ' ');
   }
 
+  private contentHash(text: string): string {
+    return createHash("sha1").update(text).digest("hex");
+  }
+
+  /** Look up stored content-hashes for a set of point IDs (for idempotent skip). */
+  private async existingHashes(ids: string[]): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    try {
+      const res = await fetch(`${config.qdrantUrl}/collections/${this.collectionName}/points`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids, with_payload: ["hash"], with_vector: false }),
+      });
+      if (!res.ok) return map;
+      const data = (await res.json()) as { result?: Array<{ id: string; payload?: { hash?: string } }> };
+      for (const p of data.result ?? []) {
+        if (p.payload?.hash) map.set(String(p.id), p.payload.hash);
+      }
+    } catch {
+      // On any error, treat as nothing-existing (safe: we re-embed).
+    }
+    return map;
+  }
+
   async upsert(chunks: KnowledgeChunk[]): Promise<void> {
     if (!chunks.length) return;
     // Process in batches of 10 to avoid overwhelming Ollama
     const BATCH_SIZE = 10;
     for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
-      const batch = chunks.slice(i, i + BATCH_SIZE);
+      const batch = chunks.slice(i, i + BATCH_SIZE).map((chunk) => ({
+        chunk,
+        id: this.stringToUUID(chunk.id),
+        hash: this.contentHash(chunk.text),
+      }));
+
+      // Idempotent skip: only (re)embed chunks whose content-hash changed.
+      const existing = await this.existingHashes(batch.map((b) => b.id));
+      const todo = batch.filter((b) => existing.get(b.id) !== b.hash);
+      if (!todo.length) continue;
+
       const vectors = await Promise.all(
-        batch.map(async (chunk) => ({
-          id: this.stringToUUID(chunk.id),
-          vector: await this.embed(chunk.text),
+        todo.map(async (b) => ({
+          id: b.id,
+          vector: await this.embed(b.chunk.text),
           payload: {
-            text: this.sanitizeText(chunk.text),
-            ...chunk.metadata,
+            text: this.sanitizeText(b.chunk.text),
+            hash: b.hash,
+            ...b.chunk.metadata,
           },
         })),
       );

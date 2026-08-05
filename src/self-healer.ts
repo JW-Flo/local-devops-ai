@@ -13,6 +13,7 @@
  */
 
 import { execSync, spawn } from "child_process";
+import { dirname } from "path";
 import { config } from "./config.js";
 import { broadcast } from "./events.js";
 
@@ -203,7 +204,9 @@ async function restartService(svc: ServiceState): Promise<boolean> {
       for (const qdrantPath of qdrantPaths) {
         try {
           const args = configPath ? ["--config-path", configPath] : [];
-          const child = spawn(qdrantPath, args, { detached: true, stdio: "ignore", shell: true });
+          // Pin cwd to the binary dir so Qdrant's ./storage location stays stable across restarts.
+          const cwd = qdrantPath.includes("\\") || qdrantPath.includes("/") ? dirname(qdrantPath) : undefined;
+          const child = spawn(qdrantPath, args, { detached: true, stdio: "ignore", shell: true, cwd });
           child.unref();
           await new Promise((r) => setTimeout(r, 8000));
           if (await pingService(svc)) {
