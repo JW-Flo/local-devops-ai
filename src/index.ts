@@ -21,7 +21,8 @@ import { KnowledgeIngester } from "./knowledge/ingester.js";
 import { githubTool, getRegistry, addRepo, removeRepo } from "./tools/github.js";
 import { addSSEClient, broadcast } from "./events.js";
 import { collectMetrics } from "./metrics.js";
-import { runAgent, getAgentState, resetAgentState } from "./agent.js";
+import { runAgent, getAgentState, resetAgentState, TOOL_CATALOG } from "./agent.js";
+import { N8nTool } from "./tools/n8n.js";
 import { executeCodeTask } from "./coding-agent.js";
 import {
   startAgentLoop, stopAgentLoop, getAgentLoopState, updateLoopConfig,
@@ -52,6 +53,7 @@ import { createOpenClawRouter } from "./openclaw/index.js";
 import { syncAllItems as syncPlaidTransactions } from "./finance-tracker/plaid.js";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { existsSync } from "fs";
 import {
   initKPITracker, getKPIDashboard, getCycleHistory, resetKPIs,
 } from "./kpi-tracker.js";
@@ -61,13 +63,22 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
-// Serve static UI files (finance.html, etc.) from ui/dist
+// Serve static UI files (unified dashboard, finance.html, etc.) from ui/dist.
+// Resolve robustly across run modes: tsx from src/ (cwd=repo root) and the
+// compiled dist/src layout both work by probing candidate paths.
 const __filename_local = fileURLToPath(import.meta.url);
 const __dirname_local = dirname(__filename_local);
-const uiDistPath = join(__dirname_local, "..", "..", "ui", "dist");
+const uiDistCandidates = [
+  join(process.cwd(), "ui", "dist"),
+  join(__dirname_local, "..", "..", "ui", "dist"),
+  join(__dirname_local, "..", "ui", "dist"),
+];
+const uiDistPath = uiDistCandidates.find((p) => existsSync(p)) ?? uiDistCandidates[0];
+console.log(`[ui] serving dashboard from ${uiDistPath}`);
 app.use(express.static(uiDistPath));
 
 const orchestrator = new TaskOrchestrator();
+const n8nTool = new N8nTool();
 const scheduler = new Scheduler(orchestrator);
 const knowledgeIngester = new KnowledgeIngester();
 
@@ -90,6 +101,80 @@ app.get("/metrics", async (_req, res) => {
   } catch (err) {
     res.status(500).json({ status: "error", message: (err as Error).message });
   }
+});
+
+// ── Unified Dashboard Aggregate ──
+
+async function pingUrl(url: string, timeoutMs = 3000): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(t);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+app.get("/api/dashboard", async (_req, res) => {
+  const states = getServiceStates();
+  const services = await Promise.all(
+    Object.values(states).map(async (svc) => ({
+      name: svc.name,
+      url: svc.url,
+      up: await pingUrl(`${svc.url}${svc.healthPath}`),
+      lastUp: svc.lastUp,
+      restartAttempts: svc.restartAttempts,
+      autoRestart: svc.autoRestart !== false,
+    })),
+  );
+  services.unshift({
+    name: "gateway",
+    url: `http://127.0.0.1:${config.port}`,
+    up: true,
+    lastUp: Date.now(),
+    restartAttempts: 0,
+    autoRestart: false,
+  });
+
+  let n8nWorkflows: Array<{ id: string; name: string; active: boolean }> = [];
+  let n8nReachable = false;
+  try {
+    n8nReachable = await n8nTool.isAvailable();
+    if (n8nReachable && config.n8nApiKey) {
+      const wf = await n8nTool.listWorkflows();
+      n8nWorkflows = wf.map((w) => ({ id: w.id, name: w.name, active: w.active }));
+    }
+  } catch { /* n8n optional */ }
+
+  const providers = Object.values(getProviderHealth()).map((p) => ({
+    name: p.name,
+    disabled: p.disabled,
+    recoveryMode: p.recoveryMode,
+    consecutiveFailures: p.consecutiveFailures,
+    lastSuccess: p.lastSuccess,
+    lastFailure: p.lastFailure,
+  }));
+
+  res.json({
+    status: "success",
+    timestamp: new Date().toISOString(),
+    gateway: {
+      port: config.port,
+      llmProvider: config.llmProvider,
+      primaryModel: config.primaryModel,
+      codeModel: config.codeModel,
+      fastModel: config.fastModel,
+    },
+    services,
+    providers,
+    tools: TOOL_CATALOG,
+    n8n: { reachable: n8nReachable, apiKeyConfigured: Boolean(config.n8nApiKey), workflows: n8nWorkflows },
+    agentLoop: getAgentLoopState(),
+    healer: getHealerStats(),
+    kpi: getKPIDashboard(),
+  });
 });
 
 // ── SSE Event Stream ──
