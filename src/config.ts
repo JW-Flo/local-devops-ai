@@ -57,6 +57,8 @@ type Config = {
   iftttTriggers?: string;
   // Market Agent — Kalshi
   kalshiApiKey?: string;
+  kalshiApiKeyId?: string;
+  kalshiRsaKeyPath?: string;
   kalshiEmail?: string;
   kalshiPassword?: string;
   kalshiBaseUrl: string;
@@ -144,6 +146,8 @@ export const config: Config = {
   iftttTriggers: process.env.IFTTT_TRIGGERS,
   // Market Agent — Kalshi
   kalshiApiKey: process.env.KALSHI_API_KEY,
+  kalshiApiKeyId: process.env.KALSHI_API_KEY_ID,
+  kalshiRsaKeyPath: process.env.KALSHI_RSA_KEY_PATH,
   kalshiEmail: process.env.KALSHI_EMAIL,
   kalshiPassword: process.env.KALSHI_PASSWORD,
   kalshiBaseUrl: process.env.KALSHI_BASE_URL ?? "https://api.elections.kalshi.com/trade-api/v2",

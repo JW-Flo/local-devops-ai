@@ -178,7 +178,7 @@ export function createWhatsAppRouter(): Router {
   router.post("/stop", async (_req, res) => {
     try {
       if (socket) {
-        await socket.end();
+        socket.end(undefined);
         socket = null;
       }
       res.json({ status: "success", message: "WhatsApp disconnected" });
