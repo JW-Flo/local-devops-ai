@@ -1,6 +1,7 @@
 import type { TaskRequest } from "../task-schema.js";
 import { knowledgeStore } from "./store.js";
 import { KiwixTool } from "../tools/kiwix.js";
+import { semanticWiki, wikiCollectionReady } from "./wiki-semantic.js";
 
 const kiwix = new KiwixTool();
 
@@ -32,7 +33,25 @@ export async function getContextForTask(task: TaskRequest): Promise<string> {
     console.warn("[context] vector retrieval failed:", (err as Error).message);
   }
 
-  // 2) Wikipedia fallback when the vector store lacks strong hits (< 2)
+  // 2) Semantic Wikipedia (bge-m3 pre-embedded) when docs are thin.
+  if (strongHits < 2) {
+    try {
+      if (await wikiCollectionReady()) {
+        const hits = (await semanticWiki(task.objective, 3)).filter((h) => h.score >= 0.5);
+        if (hits.length) {
+          parts.push(
+            "Wikipedia (semantic):\n" +
+              hits.map((h) => `- ${h.title}: ${h.text.slice(0, 240)}`).join("\n"),
+          );
+          strongHits += hits.length;
+        }
+      }
+    } catch (err) {
+      console.warn("[context] semantic wiki failed:", (err as Error).message);
+    }
+  }
+
+  // 3) Offline-Wikipedia keyword fallback (Kiwix) when still thin.
   if (strongHits < 2) {
     try {
       if (await kiwix.isAvailable()) {
