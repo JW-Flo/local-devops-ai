@@ -73,6 +73,11 @@ export class OrderbookState {
     return this.books.get(ticker);
   }
 
+  /** Number of tracked orderbooks. */
+  getBookCount(): number {
+    return this.books.size;
+  }
+
   getBestBid(ticker: string): number | undefined {
     const book = this.books.get(ticker);
     return book?.yesBids[0]?.price;
