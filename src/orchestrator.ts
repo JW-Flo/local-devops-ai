@@ -342,12 +342,19 @@ export class TaskOrchestrator {
       timestamp: new Date().toISOString(),
     };
 
-    await memoryStore.add({
-      title: `${task.type.toUpperCase()}: ${task.objective.slice(0, 80)}`,
-      details: llm.output,
-      tags: ["task", ...task.tools],
-      source: "task-orchestrator",
-    });
+    // Best-effort memory write — must never fail the task response.
+    // (sql.js is single-threaded WASM; a persist() can race the auto-flush
+    //  timer under gateway concurrency and throw.)
+    try {
+      await memoryStore.add({
+        title: `${task.type.toUpperCase()}: ${task.objective.slice(0, 80)}`,
+        details: llm.output,
+        tags: ["task", ...task.tools],
+        source: "task-orchestrator",
+      });
+    } catch (err) {
+      console.warn("[orchestrator] memory persist failed (non-fatal):", (err as Error)?.message || err);
+    }
 
     return result;
   }

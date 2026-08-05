@@ -206,6 +206,7 @@ app.post("/tasks", async (req, res) => {
       res.json({ status: "success", data: result });
     }
   } catch (err) {
+    console.error("[/tasks] execution error:", err instanceof Error ? (err.stack ?? err.message) : err);
     broadcast("task:failed", { objective: parse.data.objective, error: (err as Error).message });
     res.status(500).json({ status: "error", message: err instanceof Error ? err.message : "Unknown error" });
   }

@@ -18,6 +18,9 @@ const wasmLocator = (file: string) =>
 
 let SQL: Awaited<ReturnType<typeof initSqlJs>> | null = null;
 const dbRegistry = new Map<string, Promise<DbEntry>>();
+// sql.js is single-threaded WASM — serialize all access per DB so a
+// query never runs concurrently with export()/persist().
+const dbLocks = new Map<string, Promise<unknown>>();
 
 async function getSqlJs() {
   if (!SQL) {
@@ -84,7 +87,8 @@ setInterval(async () => {
     try {
       const entry = await promise;
       if (entry.dirty) {
-        await persist(entry);
+        // Persist under the per-DB lock so export() can't race a query.
+        await withDb(() => {}, { db: name, persist: true });
       }
     } catch {
       // DB not ready yet or failed — skip
@@ -110,12 +114,18 @@ export async function withDb<T>(
 ): Promise<T> {
   const dbName = (options as WithDbOptions)?.db ?? "gateway";
   const entry = await getDbPromise(dbName);
-  const result = await fn(entry.db);
-  if (options?.persist) {
-    entry.dirty = true;
-    await persist(entry);
-  }
-  return result;
+  // Serialize per-DB: chain onto any in-flight operation for this database.
+  const prev = dbLocks.get(dbName) ?? Promise.resolve();
+  const run = prev.catch(() => {}).then(async () => {
+    const result = await fn(entry.db);
+    if (options?.persist) {
+      entry.dirty = true;
+      await persist(entry);
+    }
+    return result;
+  });
+  dbLocks.set(dbName, run.catch(() => {}));
+  return run;
 }
 
 /**
