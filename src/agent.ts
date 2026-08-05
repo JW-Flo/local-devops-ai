@@ -60,7 +60,7 @@ const ROADMAP_FILES = [
   ".github/ROADMAP.md",
 ];
 
-const TOOL_CATALOG = [
+export const TOOL_CATALOG = [
   { name: "github", desc: "read/write files, branches, PRs, sync repo context" },
   { name: "git", desc: "local git status, commit, apply patches" },
   { name: "shell", desc: "run CLI commands (npm, tsc, lint, test)" },

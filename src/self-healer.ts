@@ -85,6 +85,8 @@ type ServiceState = {
   lastRestartAttempt: number;
   maxRestartAttempts: number;
   restartCooldownMs: number;
+  /** When false, the healer monitors but does not attempt auto-restart. */
+  autoRestart?: boolean;
 };
 
 const serviceStates: Record<string, ServiceState> = {
@@ -111,6 +113,19 @@ const serviceStates: Record<string, ServiceState> = {
     lastRestartAttempt: 0,
     maxRestartAttempts: 3,
     restartCooldownMs: 5 * 60 * 1000,
+  },
+  n8n: {
+    name: "n8n",
+    url: config.n8nBaseUrl || "http://127.0.0.1:5678",
+    healthPath: "/healthz",
+    lastCheck: 0,
+    lastUp: 0,
+    consecutiveDownChecks: 0,
+    restartAttempts: 0,
+    lastRestartAttempt: 0,
+    maxRestartAttempts: 0,
+    restartCooldownMs: 5 * 60 * 1000,
+    autoRestart: false,
   },
 };
 
@@ -246,7 +261,7 @@ async function checkServiceHealth(): Promise<void> {
       svc.lastUp = Date.now();
     } else {
       svc.consecutiveDownChecks++;
-      if (svc.consecutiveDownChecks >= 2) {
+      if (svc.consecutiveDownChecks >= 2 && svc.autoRestart !== false) {
         await restartService(svc);
       }
     }
