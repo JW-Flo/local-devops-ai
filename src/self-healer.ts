@@ -127,6 +127,19 @@ const serviceStates: Record<string, ServiceState> = {
     restartCooldownMs: 5 * 60 * 1000,
     autoRestart: false,
   },
+  kiwix: {
+    name: "kiwix",
+    url: config.kiwixUrl || "http://127.0.0.1:5690",
+    healthPath: "/health",
+    lastCheck: 0,
+    lastUp: 0,
+    consecutiveDownChecks: 0,
+    restartAttempts: 0,
+    lastRestartAttempt: 0,
+    maxRestartAttempts: 0,
+    restartCooldownMs: 5 * 60 * 1000,
+    autoRestart: false,
+  },
 };
 
 async function pingService(svc: ServiceState): Promise<boolean> {

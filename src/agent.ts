@@ -72,6 +72,7 @@ export const TOOL_CATALOG = [
   { name: "flux", desc: "GitOps reconciliation" },
   { name: "observability", desc: "prometheus/loki/grafana queries" },
   { name: "n8n", desc: "list/get/activate workflows and trigger webhook automations" },
+  { name: "kiwix", desc: "full-text search + article lookup over offline Wikipedia" },
 ];
 
 // ── Smart Multi-Provider LLM Routing ──
